@@ -22,9 +22,6 @@ void invert(char * pairs_dir, char * output_dir, int chunk_id) {
 	int i;
 	for (i=0; i < total_records; i++) {
 		suffixarray[pairs_buffer[i].value % WORKING_CHUNK_SIZE] = pairs_buffer[i].index;
-		if (pairs_buffer[i].index == 163738776 || pairs_buffer[i].index == 29533296) {
-			printf("Index: %ld\tValue: %ld\n", pairs_buffer[i].index, pairs_buffer[i].value);
-		}
 	}
 	free(pairs_buffer);
 
