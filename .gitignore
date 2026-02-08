@@ -52,12 +52,17 @@ Mkfile.old
 dkms.conf
 
 # Output Files 
+*create_pairs
+*invert
 *init
 *input_to_binary
-*generate_local_ranks
-*resolve_global_ranks
-*update_local_ranks
+*refine
+*merge
+*update
 
 # Folders
 *input/
 *ranks/
+*output
+
+.DS_Store
