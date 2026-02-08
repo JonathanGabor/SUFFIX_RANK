@@ -1,11 +1,11 @@
 #!/bin/bash
 
-if [[ $(uname -s) = Darwin ]]
-then
-    DATE="gdate +%s.%N"
+if date +%s.%N &>/dev/null; then
+    timestamp() { date +%s.%N; }
 else
-    DATE="date +%s.%N"
+    timestamp() { perl -MTime::HiRes=time -e 'printf "%.9f\n", time'; }
 fi
+DATE=timestamp
 
 #constants
 TEMP_DIR=tmp
