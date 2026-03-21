@@ -10,7 +10,6 @@ DATE=timestamp
 
 #constants
 TEMP_DIR=tmp
-BINARY_INPUT_DIR=input
 RANK_DIR=ranks
 OUTPUT_DIR=output
 
@@ -22,35 +21,12 @@ STATE=$SUCCESS
 CHUNKS=0
 
 TRUESTART=$($DATE)
-#Part 0. Preprocessing - convering text files to binary with sentinels
-#need directory input to store binary files with sentinels
-if [[ -d $BINARY_INPUT_DIR ]]
-then
-    rm -rf ${BINARY_INPUT_DIR}/*
-else
-    mkdir ${BINARY_INPUT_DIR}
-fi
 
-#convert text files to binary input
-TOTALFILES=0
-
-if [[ -d $1 ]]
+if [[ ! -d $1 ]]
 then
-    for FILE in $1/*
-    do
-        if [[ -f "$FILE" ]]
-        then
-            (( TOTALFILES++ ))
-            ./input_to_binary $FILE $BINARY_INPUT_DIR
-            echo "processed file $FILE with exit code $?"
-        fi
-    done
-else
     echo "No such directory $1"
     exit 1
 fi
-
-echo "Total $TOTALFILES files to process"
 
 #prepare directory structure for processing
 #need output dir
@@ -70,7 +46,7 @@ fi
 
 START=$($DATE)
 #Part 1. Count totals of characters in all input files
-./init ${BINARY_INPUT_DIR} ${RANK_DIR}
+./init $1 ${RANK_DIR}
 STATUS=$?
 
 if [[ $STATUS -eq $FAILURE ]]
