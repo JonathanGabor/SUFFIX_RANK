@@ -8,7 +8,8 @@
 
 //create RunRecord triplet and sort
 void sort_and_output_group(int * sa_buffer, long * next_ranks_buffer, long current_rank,
-                           int start_interval, int end_interval, FILE *runsFP){
+                           int start_interval, int end_interval,
+                           RunRecord * out_buf, int * out_count){
 
 	int i;
 	tsort(&sa_buffer[start_interval], next_ranks_buffer, end_interval-start_interval);
@@ -18,10 +19,10 @@ void sort_and_output_group(int * sa_buffer, long * next_ranks_buffer, long curre
 	output.count = 1;
 	output.nextRank = next_ranks_buffer[sa_buffer[start_interval]];
 
-  //find runs and write them to output
+  //find runs and append them to output buffer
 	for (i = start_interval+1; i < end_interval; i++) {
 		if (next_ranks_buffer[sa_buffer[i]] != output.nextRank) {
-			Fwrite (&output, sizeof(RunRecord), 1, runsFP);
+			out_buf[(*out_count)++] = output;
 			output.count = 1;
 			output.nextRank = next_ranks_buffer[sa_buffer[i]];
 		}
@@ -29,12 +30,13 @@ void sort_and_output_group(int * sa_buffer, long * next_ranks_buffer, long curre
 			output.count++;
 		}
 	}
-	Fwrite (&output, sizeof(RunRecord), 1, runsFP);
+	out_buf[(*out_count)++] = output;
 }
 
 int generate_local_runs (char * rank_dir, char * runs_dir, int total_chunks,
                          int chunk_id, int h, long * current_ranks_buffer,
-                         long * next_ranks_buffer, int * sa_buffer) {
+                         long * next_ranks_buffer, int * sa_buffer,
+                         RunRecord * runs_buffer) {
 
   char runs_file_name [MAX_PATH_LENGTH];
   FILE *runsFP = NULL;
@@ -109,6 +111,7 @@ int generate_local_runs (char * rank_dir, char * runs_dir, int total_chunks,
 	int start_interval = 0;
 	long previous_rank = current_ranks_buffer[sa_buffer[0]];
 	long current_rank;
+	int out_count = 0;
 
   //Read through current_ranks_buffer until it changes.  Then sort based on next_rank.
 	for (i=1; i < total_records; i++) {
@@ -116,14 +119,15 @@ int generate_local_runs (char * rank_dir, char * runs_dir, int total_chunks,
 		if (current_rank != previous_rank) {
 			//sort, generate runs
 			sort_and_output_group(sa_buffer, next_ranks_buffer, previous_rank,
-				                      start_interval, i, runsFP);
+				                      start_interval, i, runs_buffer, &out_count);
 			start_interval = i;
 			previous_rank = current_rank;
 		}
 	}
 	sort_and_output_group(sa_buffer, next_ranks_buffer, previous_rank,
-		                      start_interval, total_records, runsFP);
+		                      start_interval, total_records, runs_buffer, &out_count);
 
+	Fwrite(runs_buffer, sizeof(RunRecord), out_count, runsFP);
 	fclose(runsFP);
 	runsFP = NULL;
 	//return pointer to the beginning of the sa chunk
@@ -153,10 +157,11 @@ int main(int argc, char ** argv){
   long *current_ranks_buffer = (long *) Calloc ((WORKING_CHUNK_SIZE) *sizeof (long));
   long *next_ranks_buffer = (long *) Calloc ((WORKING_CHUNK_SIZE) *sizeof (long));
   int *sa_buffer = (int *) Calloc ((WORKING_CHUNK_SIZE) *sizeof (int));
+  RunRecord *runs_buffer = (RunRecord *) Calloc ((WORKING_CHUNK_SIZE) *sizeof (RunRecord));
 
   int more_runs = EMPTY;
   for (chunk_id=0; chunk_id<total_chunks; chunk_id++) {
-	   int result = generate_local_runs (rank_dir, runs_dir, total_chunks, chunk_id, h, current_ranks_buffer, next_ranks_buffer, sa_buffer);
+	   int result = generate_local_runs (rank_dir, runs_dir, total_chunks, chunk_id, h, current_ranks_buffer, next_ranks_buffer, sa_buffer, runs_buffer);
      if (result == FAILURE){
        return FAILURE;
      }
@@ -168,6 +173,7 @@ int main(int argc, char ** argv){
   free (sa_buffer);
   free (current_ranks_buffer);
   free (next_ranks_buffer);
+  free (runs_buffer);
 
   return more_runs;
 }
