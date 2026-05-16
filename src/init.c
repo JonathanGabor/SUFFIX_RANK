@@ -185,40 +185,67 @@ int count_characters(char *input_directory, char *output_directory,
 
 	if (TEST_PERFORMANCE) start_while = clock();
 
-	// Pass 2: assign ranks and build initial per-chunk suffix arrays. Uses the
-	// shared symbol iterator so verify.c sees the exact same stream.
-	InputStream stream;
-	if (input_stream_open(&stream, input_directory, word_length) != SUCCESS) {
-		free_sorted_files(files, n_files);
-		free(output_buffer); free(sa_buffer); free(buffer);
-		free(read_buf); free(counts); free(ranks);
-		return FAILURE;
-	}
-	uint32_t sym;
-	int sent_id;
-	int status;
-	while ((status = input_stream_next(&stream, &sym, &sent_id)) == SUCCESS) {
-		if (sent_id >= 0) {
-			output_buffer[pos_in_buffer] = current_sentinel--;
-			buffer[pos_in_buffer] = 0;
-			counts[0]++;
-		} else {
-			output_buffer[pos_in_buffer] = ranks[sym];
-			buffer[pos_in_buffer] = sym;
-			counts[sym]++;
+	// Pass 2: assign ranks and build initial per-chunk suffix arrays. Mirrors
+	// Pass 1's bulk-read inner loop (a per-symbol iterator was measurably
+	// slower due to stdio overhead on each word_length-byte read).
+	for (j = 0; j < n_files; j++) {
+		FILE *fp = NULL;
+		OpenBinaryFileRead(&fp, files[j]);
+		uint8_t carry[MAX_WORD_LENGTH];
+		int carry_len = 0;
+		size_t r;
+		while ((r = fread(read_buf, 1, read_buf_bytes, fp)) > 0) {
+			size_t cursor = 0;
+			if (carry_len > 0) {
+				int need = word_length - carry_len;
+				if ((size_t)need <= r) {
+					memcpy(carry + carry_len, read_buf, need);
+					uint32_t sym = pack_be(carry, word_length) + 1;
+					output_buffer[pos_in_buffer] = ranks[sym];
+					buffer[pos_in_buffer] = sym;
+					counts[sym]++;
+					pos_in_buffer++;
+					if (pos_in_buffer == working_chunk_size)
+						flush_chunk(output_buffer, buffer, sa_buffer, counts, alphabet_size,
+						            &pos_in_buffer, &chunk_id, output_directory,
+						            &outputFP, &saFP);
+					cursor = need;
+					carry_len = 0;
+				} else {
+					memcpy(carry + carry_len, read_buf, r);
+					carry_len += (int) r;
+					continue;
+				}
+			}
+			while (cursor + (size_t)word_length <= r) {
+				uint32_t sym = pack_be(read_buf + cursor, word_length) + 1;
+				output_buffer[pos_in_buffer] = ranks[sym];
+				buffer[pos_in_buffer] = sym;
+				counts[sym]++;
+				pos_in_buffer++;
+				cursor += word_length;
+				if (pos_in_buffer == working_chunk_size)
+					flush_chunk(output_buffer, buffer, sa_buffer, counts, alphabet_size,
+					            &pos_in_buffer, &chunk_id, output_directory,
+					            &outputFP, &saFP);
+			}
+			if (cursor < r) {
+				carry_len = (int)(r - cursor);
+				memcpy(carry, read_buf + cursor, carry_len);
+			}
 		}
+		// carry_len > 0 here would have been caught in pass 1 already.
+		fclose(fp);
+
+		// Per-file sentinel.
+		output_buffer[pos_in_buffer] = current_sentinel--;
+		buffer[pos_in_buffer] = 0;
+		counts[0]++;
 		pos_in_buffer++;
 		if (pos_in_buffer == working_chunk_size)
 			flush_chunk(output_buffer, buffer, sa_buffer, counts, alphabet_size,
 			            &pos_in_buffer, &chunk_id, output_directory,
 			            &outputFP, &saFP);
-	}
-	input_stream_close(&stream);
-	if (status == FAILURE) {
-		free_sorted_files(files, n_files);
-		free(output_buffer); free(sa_buffer); free(buffer);
-		free(read_buf); free(counts); free(ranks);
-		return FAILURE;
 	}
 
 	if (pos_in_buffer > 0)
