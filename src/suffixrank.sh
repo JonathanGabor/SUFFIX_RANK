@@ -30,6 +30,12 @@ then
     exit 1
 fi
 
+INPUT_DIR=$(cd "$1" && pwd)
+
+# Run relative to the script's own directory so ./init, ranks/, tmp/, output/
+# resolve correctly regardless of the caller's working directory.
+cd "$(dirname "$0")"
+
 # Parse optional chunk size (must be a positive power of 2).
 CHUNK_SIZE="${2:-16777216}"
 if ! [[ "$CHUNK_SIZE" =~ ^[0-9]+$ ]] || (( CHUNK_SIZE <= 0 )); then
@@ -60,7 +66,7 @@ done
 
 #Part 1. Initial bucket sort: read source files directly, write ranks_* and sa_* chunks.
 START=$($DATE)
-./init "$1" "$RANK_DIR" "$CHUNK_SIZE" "$WORD_LENGTH"
+./init "$INPUT_DIR" "$RANK_DIR" "$CHUNK_SIZE" "$WORD_LENGTH"
 STATUS=$?
 
 if [[ $STATUS -eq $FAILURE ]]
