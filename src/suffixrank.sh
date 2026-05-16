@@ -9,7 +9,6 @@ fi
 DATE=timestamp
 
 #constants
-BINARY_INPUT_DIR=input_binary
 TEMP_DIR=tmp
 RANK_DIR=ranks
 OUTPUT_DIR=output
@@ -25,8 +24,9 @@ TRUESTART=$($DATE)
 
 if [[ -z "$1" ]] || [[ ! -d "$1" ]]
 then
-    echo "Usage: $0 <input_text_dir> [chunk_size]"
-    echo "  chunk_size: positive power of 2 (default 16777216)"
+    echo "Usage: $0 INPUT_FOLDER [CHUNK_SIZE] [WORD_LENGTH]"
+    echo "  CHUNK_SIZE:  positive power of 2 (default 16777216)"
+    echo "  WORD_LENGTH: bytes per symbol, 1..4 (default 1)"
     exit 1
 fi
 
@@ -40,10 +40,17 @@ if (( (CHUNK_SIZE & (CHUNK_SIZE - 1)) != 0 )); then
     echo "Invalid chunk size $CHUNK_SIZE: must be a power of 2"
     exit 1
 fi
-echo "Using chunk size: $CHUNK_SIZE"
+
+# Parse optional word length (1..4).
+WORD_LENGTH="${3:-1}"
+if ! [[ "$WORD_LENGTH" =~ ^[0-9]+$ ]] || (( WORD_LENGTH < 1 || WORD_LENGTH > 4 )); then
+    echo "Invalid word_length '$WORD_LENGTH': must be an integer in [1, 4]"
+    exit 1
+fi
+echo "Using chunk size: $CHUNK_SIZE, word_length: $WORD_LENGTH"
 
 #prepare directory structure for processing
-for dir in "$BINARY_INPUT_DIR" "$RANK_DIR" "$OUTPUT_DIR" "$TEMP_DIR"; do
+for dir in "$RANK_DIR" "$OUTPUT_DIR" "$TEMP_DIR"; do
     if [[ -d "$dir" ]]; then
         rm -rf "${dir:?}"/*
     else
@@ -51,28 +58,9 @@ for dir in "$BINARY_INPUT_DIR" "$RANK_DIR" "$OUTPUT_DIR" "$TEMP_DIR"; do
     fi
 done
 
-#Part 1. Convert each input text file to the binary representation, appending
-#one sentinel (uint16_t 0) per file into ${BINARY_INPUT_DIR}/binary_input.
+#Part 1. Initial bucket sort: read source files directly, write ranks_* and sa_* chunks.
 START=$($DATE)
-for f in $(find "$1" -maxdepth 1 -type f | sort); do
-    ./input_to_binary "$f" "$BINARY_INPUT_DIR" "$CHUNK_SIZE"
-    STATUS=$?
-    if [[ $STATUS -ne 0 ]]; then
-        echo "input_to_binary failed on $f"
-        exit 1
-    fi
-done
-
-if [[ ! -s "$BINARY_INPUT_DIR/binary_input" ]]; then
-    echo "No input data produced in $BINARY_INPUT_DIR/binary_input"
-    exit 1
-fi
-DUR=$(echo "$($DATE) - $START" | bc)
-printf "Converted input to binary in %.4f\n" $DUR
-
-#Part 2. Initial bucket sort: read binary_input, write ranks_* and sa_* chunks.
-START=$($DATE)
-./init "$BINARY_INPUT_DIR" "$RANK_DIR" "$CHUNK_SIZE"
+./init "$1" "$RANK_DIR" "$CHUNK_SIZE" "$WORD_LENGTH"
 STATUS=$?
 
 if [[ $STATUS -eq $FAILURE ]]

@@ -68,3 +68,4 @@ dkms.conf
 .DS_Store
 
 src/input_binary
+src/tmp

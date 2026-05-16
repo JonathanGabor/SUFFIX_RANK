@@ -26,6 +26,18 @@ long parse_chunk_size (const char *arg) {
 	return value;
 }
 
+// Parse a word-length CLI argument. Must be in [1, MAX_WORD_LENGTH].
+int parse_word_length (const char *arg) {
+	char *end = NULL;
+	long value = strtol(arg, &end, 10);
+	if (end == arg || *end != '\0' || value < 1 || value > MAX_WORD_LENGTH) {
+		fprintf(stderr, "Invalid word_length \"%s\": must be an integer in [1, %d]\n",
+		        arg, MAX_WORD_LENGTH);
+		exit(1);
+	}
+	return (int) value;
+}
+
 
 void OpenBinaryFileRead (FILE ** fp, char * file_name) {
 	if(!(*fp= fopen ( file_name, "rb" )))  {

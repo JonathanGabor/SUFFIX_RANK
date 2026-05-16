@@ -7,10 +7,7 @@ CFLAGS += -funroll-loops
 
 default: all
 
-all: input_to_binary init refine update merge create_pairs invert
-
-input_to_binary: input_to_binary.c utils.c
-	$(CC) $(CFLAGS) input_to_binary.c utils.c -o input_to_binary
+all: init refine update merge create_pairs invert
 
 init: init.c utils.c
 	$(CC) $(CFLAGS) init.c utils.c -o init
@@ -31,4 +28,4 @@ invert: invert.c utils.c
 	$(CC) $(CFLAGS) invert.c utils.c -o invert
 
 clean:
-	rm -f input_to_binary init refine merge update create_pairs invert
+	rm -f init refine merge update create_pairs invert

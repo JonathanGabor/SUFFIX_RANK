@@ -12,7 +12,7 @@ typedef struct rank_pos_pair {
 	long value;
 } InverseRecord;
 
-int count_characters (char *input_directory, char *output_directory, long working_chunk_size);
+int count_characters (char *input_directory, char *output_directory, long working_chunk_size, int word_length);
 int generate_local_runs (char * rank_dir, char * runs_dir, int total_chunks, int chunk_id, int h,
                          long working_chunk_size,
                          long * current_ranks_buffer, long * next_ranks_buffer,
