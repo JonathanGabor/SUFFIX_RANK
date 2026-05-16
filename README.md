@@ -17,11 +17,3 @@ WORD_LENGTH: bytes per symbol, 1..4 (default 1)
 Sample input folder can be downloaded from [here](https://drive.google.com/file/d/1B9muEMI97aF8-Zj_SCxHzA1tMCjtNCbR/view).  Larger inputs are available [here](https://barsky.ca/marina/SR/suffix_rank/index.html#datasets-link).
 
 The output suffix array will be in the "output" folder.
-
-### Test Correctness
-
-```
-cd correctness_test
-./test_correctness.sh <input_text_dir> <sa_output_dir> [word_length]
-```
-Note that the correctness test takes a long time to run.
