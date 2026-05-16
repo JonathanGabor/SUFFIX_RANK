@@ -4,8 +4,10 @@
 #include "utils.h"
 #include "algorithm.h"
 
-#define MAX_MEM_INPUT_BUFFERS (14 * WORKING_CHUNK_SIZE)
-#define MAX_MEM_OUTPUT_BUFFERS (14 * WORKING_CHUNK_SIZE)
+// Derived memory budget for merge buffers. Scales with the runtime chunk size.
+// Each chunk gets working_chunk_size * MERGE_BUFFER_FACTOR bytes of input
+// buffer (and the same for output buffers), divided across all total_chunks.
+#define MERGE_BUFFER_FACTOR 14L
 
 typedef struct heap_element {
 	long current_rank;
@@ -38,11 +40,12 @@ typedef struct merge_manager {
 
 	int current_heap_size;
 	int total_chunks;
+	long working_chunk_size;                       //runtime chunk size; derived buffer sizes scale with this
 	char input_dir [MAX_PATH_LENGTH];              //to generate input file based on all file_id - interval_id combination listed in inputFileNumbers
 	char output_dir [MAX_PATH_LENGTH];             //where to write merged updates for each fileid-intervalid
 }Manager;
 
-int reduce(char* input_dir, char* temp_dir, int total_chunks);
+int reduce(char* input_dir, char* temp_dir, int total_chunks, long working_chunk_size);
 void setup(Manager * manager);
 void clean_up(Manager * manager);
 void flush_output_buffers (Manager *manager, int chunk_id);

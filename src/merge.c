@@ -328,22 +328,26 @@ void setup(Manager * manager){
 	int i;
 
 
+	long mem_budget = MERGE_BUFFER_FACTOR * manager->working_chunk_size;
+
 	manager->input_file_positions  = (int *) Calloc (manager->total_chunks * sizeof(int));
 	//allocate input buffers
 	manager->input_buffers = (RunRecord **) Calloc (manager->total_chunks * sizeof (RunRecord *));
-	manager->input_buffer_capacity = MAX_MEM_INPUT_BUFFERS/(sizeof(RunRecord)*(manager->total_chunks));
+	manager->input_buffer_capacity = mem_budget / (sizeof(RunRecord)*(manager->total_chunks));
+	if (manager->input_buffer_capacity < 1) manager->input_buffer_capacity = 1;
 	for (i=0; i<manager->total_chunks;i++)
-		manager->input_buffers [i] = (RunRecord *) Calloc (manager->input_buffer_capacity *sizeof(RunRecord));
+		manager->input_buffers [i] = (RunRecord *) Calloc ((size_t)manager->input_buffer_capacity *sizeof(RunRecord));
 
 	//allocate position pointers
 	manager->input_buffer_positions  = (int *) Calloc (manager->total_chunks * sizeof(int));
 	manager->input_buffer_lengths  = (int *) Calloc (manager->total_chunks * sizeof(int));
 
 	//allocate output buffers - multiple in this algorithm
-	manager->output_buffer_capacity =  MAX_MEM_OUTPUT_BUFFERS/(sizeof(OutputElement)*(manager->total_chunks));
+	manager->output_buffer_capacity =  mem_budget / (sizeof(OutputElement)*(manager->total_chunks));
+	if (manager->output_buffer_capacity < 1) manager->output_buffer_capacity = 1;
 	manager->output_buffers = (long **) Calloc (manager->total_chunks * sizeof (long*));
 	for (i=0; i<manager->total_chunks;i++)
-		manager->output_buffers [i] = (long *) Calloc (manager->output_buffer_capacity *sizeof(OutputElement));
+		manager->output_buffers [i] = (long *) Calloc ((size_t)manager->output_buffer_capacity *sizeof(OutputElement));
 
 	manager->output_buffer_positions  = (int *) Calloc (manager->total_chunks * sizeof(int));
 
@@ -352,11 +356,12 @@ void setup(Manager * manager){
 	manager->current_heap_size = 0;
 }
 
-int reduce(char* input_dir, char* temp_dir, int total_chunks){
+int reduce(char* input_dir, char* temp_dir, int total_chunks, long working_chunk_size){
     Manager manager = {0};
     strcpy(manager.input_dir, input_dir);
     strcpy(manager.output_dir, temp_dir);
     manager.total_chunks = total_chunks;
+    manager.working_chunk_size = working_chunk_size;
     setup(&manager);
     return merge_runs(&manager);
 }
@@ -366,14 +371,15 @@ int main(int argc, char ** argv){
 	char * output_dir;
 	int total_chunks;
 
-	if (argc < 4){
-		printf("run ./resolve_global_ranks <input_dir> <output_dir> <total_chunks>\n");
+	if (argc < 5){
+		printf("run ./merge <input_dir> <output_dir> <total_chunks> <working_chunk_size>\n");
 		return FAILURE;
 	}
 	input_dir = argv[1];
 	output_dir = argv[2];
 	total_chunks = atoi(argv[3]);
+	long working_chunk_size = parse_chunk_size(argv[4]);
 
-	reduce(input_dir, output_dir, total_chunks);
+	reduce(input_dir, output_dir, total_chunks, working_chunk_size);
 	return SUCCESS;
 }

@@ -1,13 +1,29 @@
 #include "utils.h"
 #include <errno.h>
 
-void * Calloc (int num_bytes) {
+void * Calloc (size_t num_bytes) {
 	void * result =  calloc (num_bytes, 1);
 	if (result == NULL) {
-		printf ("Could not allocate array of size %d bytes\n", num_bytes);
+		printf ("Could not allocate array of size %zu bytes\n", num_bytes);
 		exit (1);
 	}
 	return result;
+}
+
+// Parse a chunk-size CLI argument. Must be a positive power of 2.
+// Exits with a clear message otherwise.
+long parse_chunk_size (const char *arg) {
+	char *end = NULL;
+	long value = strtol(arg, &end, 10);
+	if (end == arg || *end != '\0' || value <= 0) {
+		fprintf(stderr, "Invalid chunk size \"%s\": must be a positive integer\n", arg);
+		exit(1);
+	}
+	if ((value & (value - 1)) != 0) {
+		fprintf(stderr, "Invalid chunk size %ld: must be a power of 2\n", value);
+		exit(1);
+	}
+	return value;
 }
 
 
@@ -43,9 +59,9 @@ void OpenBinaryFileAppend (FILE **fp, char * file_name) {
 }
 
 void Fwrite (const void *buffer, size_t elem_size, size_t num_elements, FILE *fp ) {
-	int written = fwrite (buffer, elem_size, num_elements, fp);
+	size_t written = fwrite (buffer, elem_size, num_elements, fp);
 	if (written != num_elements) {
-		printf ("Failed to write %ld elements to file: fwrite returned %ld\n", (long)num_elements, (long)written);
+		printf ("Failed to write %zu elements to file: fwrite returned %zu\n", num_elements, written);
 		exit (1);
 	}
 }

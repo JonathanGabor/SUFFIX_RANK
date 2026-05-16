@@ -12,14 +12,16 @@ typedef struct rank_pos_pair {
 	long value;
 } InverseRecord;
 
-int count_characters (char *input_directory, char * temp_directory);
-int generate_local_runs_parallel (char * rank_dir, char * runs_dir, int total_chunks, int chunk_id, int h);
-int generate_local_runs (char * input_dir, char * temp_dir, int total_chunks, int chunk_id, int h, long * current_ranks_buffer, long * next_ranks_buffer, int * sa_buffer, RunRecord * runs_buffer);
-// int generate_local_runs_parallel (char * rank_dir, char * runs_dir, int total_chunks, int chunk_id, int h, int factor);
+int count_characters (char *input_directory, char *output_directory, long working_chunk_size);
+int generate_local_runs (char * rank_dir, char * runs_dir, int total_chunks, int chunk_id, int h,
+                         long working_chunk_size,
+                         long * current_ranks_buffer, long * next_ranks_buffer,
+                         int * sa_buffer, RunRecord * runs_buffer);
 
 int resolve_global_ranks (char *temp_dir );
-int update_local_ranks_parallel (char * rank_dir, char * temp_dir, int total_chunks, int chunk_id, int h);
-int update_local_ranks (char * rank_dir, char * temp_dir, int total_chunks, int chunk_id, int h, long * buffer_current, long * buffer_next, int * sa_buffer, long * updated_ranks);
-//int update_ranks_collect_new (char * ranks_dir, char * temp_dir, int h);
+int update_local_ranks (char * rank_dir, char * temp_dir, int total_chunks, int chunk_id, int h,
+                        long working_chunk_size,
+                        long * buffer_current, long * buffer_next,
+                        int * sa_buffer, long * updated_ranks);
 
 #endif

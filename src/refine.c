@@ -34,28 +34,30 @@ void sort_and_output_group(int * sa_buffer, long * next_ranks_buffer, long curre
 }
 
 int generate_local_runs (char * rank_dir, char * runs_dir, int total_chunks,
-                         int chunk_id, int h, long * current_ranks_buffer,
+                         int chunk_id, int h, long working_chunk_size,
+                         long * current_ranks_buffer,
                          long * next_ranks_buffer, int * sa_buffer,
                          RunRecord * runs_buffer) {
 
   char runs_file_name [MAX_PATH_LENGTH];
   FILE *runsFP = NULL;
- 	sprintf (runs_file_name, "%s/runs_%d", runs_dir, chunk_id);
+ 	snprintf(runs_file_name, sizeof runs_file_name, "%s/runs_%d", runs_dir, chunk_id);
  	OpenBinaryFileAppend(&runsFP, runs_file_name);
 
   //Determine which additional chunk must be loaded
   int size_order = 0;
-  while((WORKING_CHUNK_SIZE >> size_order) > 1) {
+  while((working_chunk_size >> size_order) > 1) {
     size_order++;
   }
 
-  int next_chunk_dist = h > size_order ? 1<<(h-size_order) : 0;
+  long next_chunk_dist = h > size_order ? 1L<<(h-size_order) : 0;
   if ((next_chunk_dist + chunk_id) > total_chunks-1) {
         fclose(runsFP);
         return EMPTY;
   }
 
-	int i, r, total_records = 0;
+	int i, total_records = 0;
+	long r;
 
 	FILE *currentFP = NULL;
 	FILE *nextFP = NULL;
@@ -65,43 +67,51 @@ int generate_local_runs (char * rank_dir, char * runs_dir, int total_chunks,
 	char next_ranks_file_name [MAX_PATH_LENGTH];
 	char sa_file_name [MAX_PATH_LENGTH];
 
-	sprintf (current_ranks_file_name, "%s/ranks_%d", rank_dir, chunk_id);
-	sprintf (sa_file_name, "%s/sa_%d", rank_dir, chunk_id);
+	snprintf(current_ranks_file_name, sizeof current_ranks_file_name, "%s/ranks_%d", rank_dir, chunk_id);
+	snprintf(sa_file_name, sizeof sa_file_name, "%s/sa_%d", rank_dir, chunk_id);
 
 	//open current rank and sa file
 	OpenBinaryFileRead (&currentFP, current_ranks_file_name);
 	OpenBinaryFileReadWrite (&saFP, sa_file_name);
 
+	// Buffers are reused across chunks within the same refine pass: zero them
+	// before each chunk so positions that read past EOF (or past a partial
+	// chunk) see deterministic zero next-ranks instead of stale data from the
+	// previous iteration.
+	memset(next_ranks_buffer, 0, (size_t)working_chunk_size * sizeof(long));
+
 	//handle reading next_rank
 	if (next_chunk_dist) {
-		sprintf (next_ranks_file_name, "%s/ranks_%d", rank_dir, chunk_id+next_chunk_dist);
+		snprintf(next_ranks_file_name, sizeof next_ranks_file_name, "%s/ranks_%d", rank_dir, (int)(chunk_id+next_chunk_dist));
 		OpenBinaryFileRead (&nextFP, next_ranks_file_name);
-		fread (next_ranks_buffer, sizeof (long), WORKING_CHUNK_SIZE, nextFP);
+		fread (next_ranks_buffer, sizeof (long), working_chunk_size, nextFP);
 		fclose(nextFP);
 	}
   else {
-		sprintf (next_ranks_file_name, "%s/ranks_%d", rank_dir, chunk_id);
+		snprintf(next_ranks_file_name, sizeof next_ranks_file_name, "%s/ranks_%d", rank_dir, chunk_id);
 		OpenBinaryFileRead (&nextFP, next_ranks_file_name);
-		if (fseek(nextFP, (1 << h)*sizeof(long), SEEK_SET)) {
-			printf ("Fseek failed trying to move to position %d in ranks file\n", (1 << h));
+		long offset = (1L << h) * (long)sizeof(long);
+		if (fseek(nextFP, offset, SEEK_SET)) {
+			printf ("Fseek failed trying to move to position %ld in ranks file\n", 1L << h);
 			exit (1);
 		}
-		r = fread (next_ranks_buffer, sizeof (long), WORKING_CHUNK_SIZE, nextFP);
+		r = (long) fread (next_ranks_buffer, sizeof (long), working_chunk_size, nextFP);
 		fclose(nextFP);
 		if (chunk_id+1 < total_chunks) {
-			sprintf (next_ranks_file_name, "%s/ranks_%d", rank_dir, chunk_id+1);
+			snprintf(next_ranks_file_name, sizeof next_ranks_file_name, "%s/ranks_%d", rank_dir, chunk_id+1);
 			OpenBinaryFileRead (&nextFP, next_ranks_file_name);
-			fread (next_ranks_buffer + r, sizeof (long), (1<<h), nextFP);
+			fread (next_ranks_buffer + r, sizeof (long), (size_t)(1L<<h), nextFP);
             fclose (nextFP);
 		}
 	}
 
 	//offset next rank by 2^h
 	//read file by chunk, sort and generate triplet for each chunk
-	fread (current_ranks_buffer, sizeof (long), WORKING_CHUNK_SIZE, currentFP);
+	memset(current_ranks_buffer, 0, (size_t)working_chunk_size * sizeof(long));
+	fread (current_ranks_buffer, sizeof (long), working_chunk_size, currentFP);
   fclose (currentFP);
 
-	total_records = fread (sa_buffer, sizeof (int), WORKING_CHUNK_SIZE, saFP);
+	total_records = fread (sa_buffer, sizeof (int), working_chunk_size, saFP);
   	if (total_records==0) {
 		fclose(runsFP);
 		fclose(saFP);
@@ -131,7 +141,7 @@ int generate_local_runs (char * rank_dir, char * runs_dir, int total_chunks,
 	fclose(runsFP);
 	runsFP = NULL;
 	//return pointer to the beginning of the sa chunk
-	fseek ( saFP, -(total_records )*sizeof(int), SEEK_CUR );
+	fseek ( saFP, -(long)total_records * (long)sizeof(int), SEEK_CUR );
 	Fwrite (sa_buffer, sizeof(int), total_records, saFP);
 	fclose(saFP);
 
@@ -142,8 +152,8 @@ int main(int argc, char ** argv){
 	char * rank_dir;
 	char * runs_dir;
 	int h, chunk_id, total_chunks;
-	if (argc<5) {
-		puts ("Run ./generate_local_runs <rank_dir> <runs_dir> <chunk_id> <order>");
+	if (argc<6) {
+		puts ("Run ./refine <rank_dir> <runs_dir> <total_chunks> <h> <working_chunk_size>");
 		return FAILURE;
 	}
 
@@ -152,16 +162,20 @@ int main(int argc, char ** argv){
 	runs_dir = argv[2];
 	total_chunks = atoi(argv[3]);
 	h = atoi(argv[4]);
+	long working_chunk_size = parse_chunk_size(argv[5]);
 
   //allocate buffers
-  long *current_ranks_buffer = (long *) Calloc ((WORKING_CHUNK_SIZE) *sizeof (long));
-  long *next_ranks_buffer = (long *) Calloc ((WORKING_CHUNK_SIZE) *sizeof (long));
-  int *sa_buffer = (int *) Calloc ((WORKING_CHUNK_SIZE) *sizeof (int));
-  RunRecord *runs_buffer = (RunRecord *) Calloc ((WORKING_CHUNK_SIZE) *sizeof (RunRecord));
+  long *current_ranks_buffer = (long *) Calloc ((size_t)working_chunk_size * sizeof (long));
+  long *next_ranks_buffer = (long *) Calloc ((size_t)working_chunk_size * sizeof (long));
+  int *sa_buffer = (int *) Calloc ((size_t)working_chunk_size * sizeof (int));
+  RunRecord *runs_buffer = (RunRecord *) Calloc ((size_t)working_chunk_size * sizeof (RunRecord));
 
   int more_runs = EMPTY;
   for (chunk_id=0; chunk_id<total_chunks; chunk_id++) {
-	   int result = generate_local_runs (rank_dir, runs_dir, total_chunks, chunk_id, h, current_ranks_buffer, next_ranks_buffer, sa_buffer, runs_buffer);
+	   int result = generate_local_runs (rank_dir, runs_dir, total_chunks, chunk_id, h,
+	                                     working_chunk_size,
+	                                     current_ranks_buffer, next_ranks_buffer,
+	                                     sa_buffer, runs_buffer);
      if (result == FAILURE){
        return FAILURE;
      }

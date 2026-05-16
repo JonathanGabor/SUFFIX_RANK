@@ -4,12 +4,13 @@ CFLAGS += -D_FILE_OFFSET_BITS=64
 CFLAGS += -D_LARGEFILE_SOURCE
 CFLAGS += -fno-exceptions
 CFLAGS += -funroll-loops
-WORKING_CHUNK_SIZE=4194304
-CFLAGS += -DWORKING_CHUNK_SIZE=\$(WORKING_CHUNK_SIZE)
 
 default: all
 
-all: init refine update merge create_pairs invert
+all: input_to_binary init refine update merge create_pairs invert
+
+input_to_binary: input_to_binary.c utils.c
+	$(CC) $(CFLAGS) input_to_binary.c utils.c -o input_to_binary
 
 init: init.c utils.c
 	$(CC) $(CFLAGS) init.c utils.c -o init
@@ -30,4 +31,4 @@ invert: invert.c utils.c
 	$(CC) $(CFLAGS) invert.c utils.c -o invert
 
 clean:
-	rm init refine merge update create_pairs invert
+	rm -f input_to_binary init refine merge update create_pairs invert

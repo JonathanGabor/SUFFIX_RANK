@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <sys/time.h>
 
 #define DEBUG 0
@@ -15,8 +16,6 @@
 #define DEFAULT_CHAR 35
 #define MAX_PATH_LENGTH 1024
 
-#define DEFAULT_CHAR_BUFFER_SIZE 524288*256
-#define DEFAULT_LONG_BUFFER_SIZE 65536*256
 #define ABSOLUTE(a) (((a) > (0)) ? (a) : ((0)-(a)))
 #define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
 #define MAX(X, Y) (((X) > (Y)) ? (X) : (Y))

@@ -6,11 +6,11 @@ FILE* currFP=NULL;
 FILE* prevFP=NULL;
 
 int compare_strings_from_files(){
-	unsigned int prev_char;
-	unsigned int curr_char;
+	uint16_t prev_char;
+	uint16_t curr_char;
 
-	while ((fread(&prev_char, sizeof (unsigned int), 1, prevFP) == 1) &&
-		(fread(&curr_char, sizeof (unsigned int), 1, currFP) == 1)) {
+	while ((fread(&prev_char, sizeof (uint16_t), 1, prevFP) == 1) &&
+		(fread(&curr_char, sizeof (uint16_t), 1, currFP) == 1)) {
 		// printf("curr char:%d, prev char:%d\n", curr_char, prev_char);
 
 		if (curr_char == 0 && prev_char == 0){
@@ -35,11 +35,11 @@ int compare_strings_from_files(){
 }
 
 int print_strings(){
-	unsigned int prev_char;
-	unsigned int curr_char;
+	uint16_t prev_char;
+	uint16_t curr_char;
 
-	while ((fread(&prev_char, sizeof (unsigned int), 1, prevFP) == 1) &&
-		(fread(&curr_char, sizeof (unsigned int), 1, currFP) == 1)) {
+	while ((fread(&prev_char, sizeof (uint16_t), 1, prevFP) == 1) &&
+		(fread(&curr_char, sizeof (uint16_t), 1, currFP) == 1)) {
 		// printf ("%c %c\n", (char)prev_char, (char)curr_char);
 		if (prev_char < curr_char){
 			fclose (currFP);
@@ -70,8 +70,8 @@ int move_to_positions (long curr_pos, long prev_pos) {
 	// printf("Looking for char at position: prev:%d, curr:%d\n",
 			// (prev_pos + WORKING_CHUNK_SIZE * prev_fid),
 			// (curr_pos + WORKING_CHUNK_SIZE * curr_fid));
-	fseek(currFP, (curr_pos)*sizeof(unsigned int), SEEK_SET);
-	fseek(prevFP, (prev_pos)*sizeof(unsigned int), SEEK_SET);
+	fseek(currFP, (curr_pos)*sizeof(uint16_t), SEEK_SET);
+	fseek(prevFP, (prev_pos)*sizeof(uint16_t), SEEK_SET);
 
 	return SUCCESS;
 }

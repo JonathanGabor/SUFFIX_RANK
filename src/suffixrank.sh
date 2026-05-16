@@ -9,6 +9,7 @@ fi
 DATE=timestamp
 
 #constants
+BINARY_INPUT_DIR=input_binary
 TEMP_DIR=tmp
 RANK_DIR=ranks
 OUTPUT_DIR=output
@@ -22,31 +23,56 @@ CHUNKS=0
 
 TRUESTART=$($DATE)
 
-if [[ ! -d $1 ]]
+if [[ -z "$1" ]] || [[ ! -d "$1" ]]
 then
-    echo "No such directory $1"
+    echo "Usage: $0 <input_text_dir> [chunk_size]"
+    echo "  chunk_size: positive power of 2 (default 16777216)"
     exit 1
 fi
 
+# Parse optional chunk size (must be a positive power of 2).
+CHUNK_SIZE="${2:-16777216}"
+if ! [[ "$CHUNK_SIZE" =~ ^[0-9]+$ ]] || (( CHUNK_SIZE <= 0 )); then
+    echo "Invalid chunk size '$CHUNK_SIZE': must be a positive integer"
+    exit 1
+fi
+if (( (CHUNK_SIZE & (CHUNK_SIZE - 1)) != 0 )); then
+    echo "Invalid chunk size $CHUNK_SIZE: must be a power of 2"
+    exit 1
+fi
+echo "Using chunk size: $CHUNK_SIZE"
+
 #prepare directory structure for processing
-#need output dir
-if [[ -d $RANK_DIR ]]
-then
-    rm -rf ${RANK_DIR}/*
-else
-    mkdir ${RANK_DIR}
-fi
+for dir in "$BINARY_INPUT_DIR" "$RANK_DIR" "$OUTPUT_DIR" "$TEMP_DIR"; do
+    if [[ -d "$dir" ]]; then
+        rm -rf "${dir:?}"/*
+    else
+        mkdir "$dir"
+    fi
+done
 
-if [[ -d $OUTPUT_DIR ]]
-then
-    rm -rf ${OUTPUT_DIR}/*
-else
-    mkdir ${OUTPUT_DIR}
-fi
-
+#Part 1. Convert each input text file to the binary representation, appending
+#one sentinel (uint16_t 0) per file into ${BINARY_INPUT_DIR}/binary_input.
 START=$($DATE)
-#Part 1. Count totals of characters in all input files
-./init $1 ${RANK_DIR}
+for f in $(find "$1" -maxdepth 1 -type f | sort); do
+    ./input_to_binary "$f" "$BINARY_INPUT_DIR" "$CHUNK_SIZE"
+    STATUS=$?
+    if [[ $STATUS -ne 0 ]]; then
+        echo "input_to_binary failed on $f"
+        exit 1
+    fi
+done
+
+if [[ ! -s "$BINARY_INPUT_DIR/binary_input" ]]; then
+    echo "No input data produced in $BINARY_INPUT_DIR/binary_input"
+    exit 1
+fi
+DUR=$(echo "$($DATE) - $START" | bc)
+printf "Converted input to binary in %.4f\n" $DUR
+
+#Part 2. Initial bucket sort: read binary_input, write ranks_* and sa_* chunks.
+START=$($DATE)
+./init "$BINARY_INPUT_DIR" "$RANK_DIR" "$CHUNK_SIZE"
 STATUS=$?
 
 if [[ $STATUS -eq $FAILURE ]]
@@ -54,22 +80,14 @@ then
     exit 1
 fi
 
-CHUNKS=$(($(ls -l ${RANK_DIR}/* | wc -l)/2))
+CHUNKS=$(ls -1 "${RANK_DIR}"/sa_* 2>/dev/null | wc -l | tr -d ' ')
 
 DUR=$(echo "$($DATE) - $START" | bc)
-printf "Finished inizializing in %.4f, total %d chunks\n" $DUR $CHUNKS
+printf "Finished initializing in %.4f, total %d chunks\n" $DUR $CHUNKS
 
 
 #set prefix length to 2^H
 H=0
-
-#need tmp dir
-if [[ -d $TEMP_DIR ]]
-then
-    rm -rf ${TEMP_DIR}/*
-else
-    mkdir ${TEMP_DIR}
-fi
 
 #Part 3. Perform O(log N) iterations of an algorithm
 # main loop
@@ -83,9 +101,7 @@ do
     rm -rf ${TEMP_DIR}/*
 
     #generate sorted runs with counts and local rank pairs grouped by file_id and interval_id
-    #valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes
-
-    ./refine ${RANK_DIR} ${TEMP_DIR} $CHUNKS $H
+    ./refine ${RANK_DIR} ${TEMP_DIR} $CHUNKS $H $CHUNK_SIZE
     STATUS=$?
 
     if [[ $STATUS -ne $EMPTY ]]
@@ -104,7 +120,7 @@ do
     then
         START=$($DATE)
         #merge local ranks into global ranks - from all the chunks
-        ./merge ${TEMP_DIR} ${TEMP_DIR} $CHUNKS
+        ./merge ${TEMP_DIR} ${TEMP_DIR} $CHUNKS $CHUNK_SIZE
         STATUS=$?
 
         if [[ $STATUS -eq $FAILURE ]]
@@ -120,8 +136,7 @@ do
         then
           START=$($DATE)
             #update local ranks with resolved global ranks
-            #valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes ./update ${RANK_DIR} ${TEMP_DIR} $H
-            ./update ${RANK_DIR} ${TEMP_DIR} $CHUNKS $H
+            ./update ${RANK_DIR} ${TEMP_DIR} $CHUNKS $H $CHUNK_SIZE
             STATUS=$?
 
             if [[ $STATUS -eq $FAILURE ]]
@@ -144,7 +159,7 @@ done
 rm -rf ${TEMP_DIR}/*
 
 START=$($DATE)
-./create_pairs ${RANK_DIR} ${TEMP_DIR} $CHUNKS
+./create_pairs ${RANK_DIR} ${TEMP_DIR} $CHUNKS $CHUNK_SIZE
 STATUS=$?
 
 if [[ $STATUS -eq $FAILURE ]]
@@ -157,7 +172,7 @@ printf "Created in %.4f seconds\n" $DUR
 START=$($DATE)
 
 
-./invert ${TEMP_DIR} ${OUTPUT_DIR} $CHUNKS
+./invert ${TEMP_DIR} ${OUTPUT_DIR} $CHUNKS $CHUNK_SIZE
 STATUS=$?
 
 if [[ $STATUS -eq $FAILURE ]]
@@ -169,7 +184,7 @@ printf "Inverted in %.4f seconds\n" $DUR
 
 DUR=$(echo "$($DATE) - $TRUESTART" | bc)
 printf "Total time: %.4f seconds\n\n" $DUR
-#clean temp directory 
+#clean temp directory
 rm -rf ${TEMP_DIR}/*
 
 exit 0

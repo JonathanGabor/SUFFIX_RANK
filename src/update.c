@@ -3,10 +3,12 @@
 #include <limits.h>
 
 int update_local_ranks (char * rank_dir, char * temp_dir, int total_chunks, int chunk_id, int h,
-						long * buffer_current, long * buffer_next, int * sa_buffer, long * updated_ranks){
+                        long working_chunk_size,
+                        long * buffer_current, long * buffer_next,
+                        int * sa_buffer, long * updated_ranks){
 	int size_order = 0;
-	while((WORKING_CHUNK_SIZE >> size_order) > 1) {size_order++;}
-	int next_chunk_dist = h > size_order ? 1<<(h-size_order) : 0;
+	while((working_chunk_size >> size_order) > 1) {size_order++;}
+	long next_chunk_dist = h > size_order ? 1L<<(h-size_order) : 0;
 	if ((next_chunk_dist + chunk_id) > total_chunks-1) return EMPTY;
 
 	char file_name[MAX_PATH_LENGTH];
@@ -20,41 +22,48 @@ int update_local_ranks (char * rank_dir, char * temp_dir, int total_chunks, int 
 
 	// open specified input file with ranks updated
 	// after previous iteration - with 2 file pointers
-	sprintf (file_name, "%s/ranks_%d", rank_dir, chunk_id);
+	snprintf(file_name, sizeof file_name, "%s/ranks_%d", rank_dir, chunk_id);
 	OpenBinaryFileReadWrite (&current_FP, file_name);
-	total_ranks = fread (buffer_current, sizeof(long), WORKING_CHUNK_SIZE, current_FP);
+	memset(buffer_current, 0, (size_t)working_chunk_size * sizeof(long));
+	total_ranks = fread (buffer_current, sizeof(long), working_chunk_size, current_FP);
+
+	// Buffers carry over across chunks within this update pass — zero them so
+	// any reads that fall past valid data see deterministic zeros, not stale
+	// values from the prior chunk.
+	memset(buffer_next, 0, (size_t)working_chunk_size * sizeof(long));
 
 	//handle reading next_rank
 	if (next_chunk_dist) {
-		sprintf (file_name, "%s/ranks_%d", rank_dir, chunk_id+next_chunk_dist);
+		snprintf(file_name, sizeof file_name, "%s/ranks_%d", rank_dir, (int)(chunk_id+next_chunk_dist));
 		OpenBinaryFileRead (&next_FP, file_name);
-		fread (buffer_next, sizeof (long), WORKING_CHUNK_SIZE, next_FP);
+		fread (buffer_next, sizeof (long), working_chunk_size, next_FP);
 	} else{
-		sprintf (file_name, "%s/ranks_%d", rank_dir, chunk_id);
+		snprintf(file_name, sizeof file_name, "%s/ranks_%d", rank_dir, chunk_id);
 		OpenBinaryFileRead (&next_FP, file_name);
-		if(fseek(next_FP, (1 << h)*sizeof(long), SEEK_SET)) {
-			printf ("Fseek failed trying to move to position %d in ranks file\n", (1 << h));
+		long offset = (1L << h) * (long)sizeof(long);
+		if(fseek(next_FP, offset, SEEK_SET)) {
+			printf ("Fseek failed trying to move to position %ld in ranks file\n", 1L << h);
 			exit (1);
 		}
-		int r = fread (buffer_next, sizeof (long), WORKING_CHUNK_SIZE, next_FP);
+		long r = (long) fread (buffer_next, sizeof (long), working_chunk_size, next_FP);
 		// fclose(next_FP);
 		if (chunk_id+1 < total_chunks) {
 			fclose(next_FP);
-			sprintf (file_name, "%s/ranks_%d", rank_dir, chunk_id+1);
+			snprintf(file_name, sizeof file_name, "%s/ranks_%d", rank_dir, chunk_id+1);
 			OpenBinaryFileRead (&next_FP, file_name);
-			fread (buffer_next + r, sizeof (long), (1<<h), next_FP);
+			fread (buffer_next + r, sizeof (long), (size_t)(1L<<h), next_FP);
 		}
 	}
 
 	// open local suffix array file where suffixes are sorted
 	// according to local current,next for this iteration
-	sprintf (file_name, "%s/sa_%d", rank_dir, chunk_id);
+	snprintf(file_name, sizeof file_name, "%s/sa_%d", rank_dir, chunk_id);
 	OpenBinaryFileRead (&saFP, file_name);
 	//read elements of sa
 	sa_length = fread (sa_buffer, sizeof(int), total_ranks, saFP);
 	fclose(saFP);
 	//open file with global updates - if exists
-	sprintf (file_name, "%s/global_%d", temp_dir, chunk_id);
+	snprintf(file_name, sizeof file_name, "%s/global_%d", temp_dir, chunk_id);
 
 	OpenBinaryFileRead(&global_resolved_FP, file_name);
 	//read content of global resolved triples(curr, next, new) into buffer
@@ -88,7 +97,7 @@ int update_local_ranks (char * rank_dir, char * temp_dir, int total_chunks, int 
 		pos = sa_buffer [m];
 		curr = buffer_current[pos];
 		next = buffer_next[pos];
-		while (curr == buffer_current[pos] && next == buffer_next[pos] && m < sa_length)
+		while (m < sa_length && curr == buffer_current[pos] && next == buffer_next[pos])
 		{
 			buffer_current[pos] = updated_ranks[q];
 			if (updated_ranks[q] <= 0) {
@@ -109,7 +118,7 @@ int update_local_ranks (char * rank_dir, char * temp_dir, int total_chunks, int 
 	rewind(current_FP);
 	Fwrite (buffer_current, sizeof(long), total_ranks, current_FP);
 
-	sprintf (file_name, "%s/sa_%d", rank_dir, chunk_id);
+	snprintf(file_name, sizeof file_name, "%s/sa_%d", rank_dir, chunk_id);
 	OpenBinaryFileWrite (&saFP, file_name);
 	Fwrite (sa_buffer, sizeof(int), sa_length-displacement, saFP);
 
@@ -125,8 +134,8 @@ int main (int argc, char **argv){
 	char * temp_dir;
 	int chunk_id, total_chunks, h;
 
-	if (argc<5) {
-		puts ("Run ./update_local_ranks <local_ranks_dir> <temp_dir> <total_chunks> <h>");
+	if (argc<6) {
+		puts ("Run ./update <local_ranks_dir> <temp_dir> <total_chunks> <h> <working_chunk_size>");
 		return FAILURE;
 	}
 
@@ -134,16 +143,19 @@ int main (int argc, char **argv){
 	temp_dir = argv[2];
 	total_chunks = atoi(argv[3]);
 	h = atoi(argv[4]);
+	long working_chunk_size = parse_chunk_size(argv[5]);
 
 	//allocate input buffers for current and next ranks, and for local suffix array
-	long * buffer_current = (long *) Calloc (WORKING_CHUNK_SIZE*sizeof(long));
-	long * buffer_next = (long *) Calloc (WORKING_CHUNK_SIZE*sizeof(long));
-	int * sa_buffer = (int *) Calloc (WORKING_CHUNK_SIZE*sizeof(int));
-	long * updated_ranks = (long *) Calloc (WORKING_CHUNK_SIZE*sizeof(long));
+	long * buffer_current = (long *) Calloc ((size_t)working_chunk_size * sizeof(long));
+	long * buffer_next = (long *) Calloc ((size_t)working_chunk_size * sizeof(long));
+	int * sa_buffer = (int *) Calloc ((size_t)working_chunk_size * sizeof(int));
+	long * updated_ranks = (long *) Calloc ((size_t)working_chunk_size * sizeof(long));
 
 	int more_runs = EMPTY;
     for (chunk_id=0; chunk_id<total_chunks; chunk_id++) {
-  	   int result = update_local_ranks (rank_dir, temp_dir, total_chunks, chunk_id, h, buffer_current, buffer_next, sa_buffer, updated_ranks);
+  	   int result = update_local_ranks (rank_dir, temp_dir, total_chunks, chunk_id, h,
+  	                                    working_chunk_size,
+  	                                    buffer_current, buffer_next, sa_buffer, updated_ranks);
        if (result == FAILURE){
          return FAILURE;
        }
