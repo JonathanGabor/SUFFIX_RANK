@@ -59,6 +59,7 @@ dkms.conf
 *refine
 *merge
 *update
+*verify
 
 # Folders
 *input/
