@@ -1,8 +1,7 @@
 #include "utils.h"
 #include "algorithm.h"
+#include "input_stream.h"
 #include "time.h"
-#include <dirent.h>
-#include <sys/stat.h>
 
 // init.c reads input files directly (no separate input_to_binary stage).
 // Each `word_length` consecutive bytes is packed big-endian into one symbol;
@@ -15,49 +14,6 @@ clock_t start, end;
 double time_read;
 double time_total, time_write = 0.0;
 clock_t start_while, end_while;
-
-
-static int compare_str(const void *a, const void *b) {
-	return strcmp(*(const char **)a, *(const char **)b);
-}
-
-// Enumerate regular files in `dir` in sorted lexicographic order. Hidden
-// (dot-prefixed) entries are skipped. Caller owns the returned array and each
-// string (free via free_sorted_files).
-static char **collect_sorted_files(const char *dir, int *n_out) {
-	DIR *dp;
-	struct dirent *ep;
-	int n = 0, cap = 16;
-	char **files = (char **) malloc(cap * sizeof(char *));
-	struct stat st;
-	char path[MAX_PATH_LENGTH];
-
-	dp = opendir(dir);
-	if (dp == NULL) {
-		printf("Cannot open directory %s\n", dir);
-		exit(FAILURE);
-	}
-	while ((ep = readdir(dp)) != NULL) {
-		if (ep->d_name[0] == '.') continue;
-		snprintf(path, MAX_PATH_LENGTH, "%s/%s", dir, ep->d_name);
-		if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) continue;
-		if (n == cap) {
-			cap *= 2;
-			files = (char **) realloc(files, cap * sizeof(char *));
-		}
-		files[n++] = strdup(path);
-	}
-	closedir(dp);
-	qsort(files, n, sizeof(char *), compare_str);
-	*n_out = n;
-	return files;
-}
-
-static void free_sorted_files(char **files, int n) {
-	int i;
-	for (i = 0; i < n; i++) free(files[i]);
-	free(files);
-}
 
 // Bucket-sort input_buffer into sa_buffer using per-chunk symbol counts.
 // counts[i] holds the frequency of symbol i in this chunk on entry; it is used
@@ -229,65 +185,40 @@ int count_characters(char *input_directory, char *output_directory,
 
 	if (TEST_PERFORMANCE) start_while = clock();
 
-	// Pass 2: assign ranks and build initial per-chunk suffix arrays.
-	for (j = 0; j < n_files; j++) {
-		FILE *fp = NULL;
-		OpenBinaryFileRead(&fp, files[j]);
-		uint8_t carry[MAX_WORD_LENGTH];
-		int carry_len = 0;
-		size_t r;
-		while ((r = fread(read_buf, 1, read_buf_bytes, fp)) > 0) {
-			size_t cursor = 0;
-			if (carry_len > 0) {
-				int need = word_length - carry_len;
-				if ((size_t)need <= r) {
-					memcpy(carry + carry_len, read_buf, need);
-					uint32_t sym = pack_be(carry, word_length) + 1;
-					output_buffer[pos_in_buffer] = ranks[sym];
-					buffer[pos_in_buffer] = sym;
-					counts[sym]++;
-					pos_in_buffer++;
-					if (pos_in_buffer == working_chunk_size)
-						flush_chunk(output_buffer, buffer, sa_buffer, counts, alphabet_size,
-						            &pos_in_buffer, &chunk_id, output_directory,
-						            &outputFP, &saFP);
-					cursor = need;
-					carry_len = 0;
-				} else {
-					memcpy(carry + carry_len, read_buf, r);
-					carry_len += (int) r;
-					continue;
-				}
-			}
-			while (cursor + (size_t)word_length <= r) {
-				uint32_t sym = pack_be(read_buf + cursor, word_length) + 1;
-				output_buffer[pos_in_buffer] = ranks[sym];
-				buffer[pos_in_buffer] = sym;
-				counts[sym]++;
-				pos_in_buffer++;
-				cursor += word_length;
-				if (pos_in_buffer == working_chunk_size)
-					flush_chunk(output_buffer, buffer, sa_buffer, counts, alphabet_size,
-					            &pos_in_buffer, &chunk_id, output_directory,
-					            &outputFP, &saFP);
-			}
-			if (cursor < r) {
-				carry_len = (int)(r - cursor);
-				memcpy(carry, read_buf + cursor, carry_len);
-			}
+	// Pass 2: assign ranks and build initial per-chunk suffix arrays. Uses the
+	// shared symbol iterator so verify.c sees the exact same stream.
+	InputStream stream;
+	if (input_stream_open(&stream, input_directory, word_length) != SUCCESS) {
+		free_sorted_files(files, n_files);
+		free(output_buffer); free(sa_buffer); free(buffer);
+		free(read_buf); free(counts); free(ranks);
+		return FAILURE;
+	}
+	uint32_t sym;
+	int sent_id;
+	int status;
+	while ((status = input_stream_next(&stream, &sym, &sent_id)) == SUCCESS) {
+		if (sent_id >= 0) {
+			output_buffer[pos_in_buffer] = current_sentinel--;
+			buffer[pos_in_buffer] = 0;
+			counts[0]++;
+		} else {
+			output_buffer[pos_in_buffer] = ranks[sym];
+			buffer[pos_in_buffer] = sym;
+			counts[sym]++;
 		}
-		// carry_len > 0 here would have been caught in pass 1 already.
-		fclose(fp);
-
-		// Per-file sentinel.
-		output_buffer[pos_in_buffer] = current_sentinel--;
-		buffer[pos_in_buffer] = 0;
-		counts[0]++;
 		pos_in_buffer++;
 		if (pos_in_buffer == working_chunk_size)
 			flush_chunk(output_buffer, buffer, sa_buffer, counts, alphabet_size,
 			            &pos_in_buffer, &chunk_id, output_directory,
 			            &outputFP, &saFP);
+	}
+	input_stream_close(&stream);
+	if (status == FAILURE) {
+		free_sorted_files(files, n_files);
+		free(output_buffer); free(sa_buffer); free(buffer);
+		free(read_buf); free(counts); free(ranks);
+		return FAILURE;
 	}
 
 	if (pos_in_buffer > 0)

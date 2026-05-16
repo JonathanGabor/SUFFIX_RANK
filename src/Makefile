@@ -7,10 +7,10 @@ CFLAGS += -funroll-loops
 
 default: all
 
-all: init refine update merge create_pairs invert
+all: init refine update merge create_pairs invert verify
 
-init: init.c utils.c
-	$(CC) $(CFLAGS) init.c utils.c -o init
+init: init.c utils.c input_stream.c
+	$(CC) $(CFLAGS) init.c utils.c input_stream.c -o init
 
 refine: refine.c utils.c
 	$(CC) $(CFLAGS) refine.c utils.c -o refine
@@ -27,5 +27,8 @@ create_pairs: create_pairs.c utils.c
 invert: invert.c utils.c
 	$(CC) $(CFLAGS) invert.c utils.c -o invert
 
+verify: verify.c utils.c input_stream.c
+	$(CC) $(CFLAGS) verify.c utils.c input_stream.c -o verify
+
 clean:
-	rm -f init refine merge update create_pairs invert
+	rm -f init refine merge update create_pairs invert verify

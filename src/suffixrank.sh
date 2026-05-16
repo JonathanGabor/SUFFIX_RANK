@@ -22,11 +22,24 @@ CHUNKS=0
 
 TRUESTART=$($DATE)
 
+# Pull out --verify (may appear anywhere); remaining args stay positional.
+RUN_VERIFY=0
+POSITIONAL=()
+for arg in "$@"; do
+    if [[ "$arg" == "--verify" ]]; then
+        RUN_VERIFY=1
+    else
+        POSITIONAL+=("$arg")
+    fi
+done
+set -- "${POSITIONAL[@]}"
+
 if [[ -z "$1" ]] || [[ ! -d "$1" ]]
 then
-    echo "Usage: $0 INPUT_FOLDER [CHUNK_SIZE] [WORD_LENGTH]"
+    echo "Usage: $0 INPUT_FOLDER [CHUNK_SIZE] [WORD_LENGTH] [--verify]"
     echo "  CHUNK_SIZE:  positive power of 2 (default 16777216)"
     echo "  WORD_LENGTH: bytes per symbol, 1..4 (default 1)"
+    echo "  --verify:    run external-memory correctness checker after pipeline"
     exit 1
 fi
 
@@ -178,6 +191,22 @@ printf "Inverted in %.4f seconds\n" $DUR
 
 DUR=$(echo "$($DATE) - $TRUESTART" | bc)
 printf "Total time: %.4f seconds\n\n" $DUR
+
+# Optional external-memory correctness check. Runs before the tmp cleanup
+# because verify uses tmp/ for its partition files.
+if (( RUN_VERIFY == 1 )); then
+    rm -rf ${TEMP_DIR}/*
+    START=$($DATE)
+    ./verify "$INPUT_DIR" "$RANK_DIR" "$OUTPUT_DIR" "$TEMP_DIR" $CHUNKS $CHUNK_SIZE $WORD_LENGTH
+    STATUS=$?
+    DUR=$(echo "$($DATE) - $START" | bc)
+    printf "Verified in %.4f seconds\n" $DUR
+    if [[ $STATUS -ne $SUCCESS ]]; then
+        rm -rf ${TEMP_DIR}/*
+        exit 1
+    fi
+fi
+
 #clean temp directory
 rm -rf ${TEMP_DIR}/*
 
