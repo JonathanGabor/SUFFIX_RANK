@@ -262,7 +262,7 @@ int refill_buffer (Manager * manager, int chunk_id) {
 		return EMPTY; //run is complete - no more elements in the input file
 	}
 
-	sprintf(currentInputFileName, "%s/runs_%d" , manager->input_dir, chunk_id);
+	snprintf(currentInputFileName, sizeof(currentInputFileName), "%s/runs_%d", manager->input_dir, chunk_id);
 
 	OpenBinaryFileRead (&(inputFP), currentInputFileName);
 	result = fseek (inputFP , manager->input_file_positions[chunk_id]*sizeof (RunRecord) , SEEK_SET );
@@ -299,7 +299,7 @@ void flush_output_buffers (Manager *manager, int chunk_id) {
 	char file_name [MAX_PATH_LENGTH];
 	FILE * outputFP;
 
-	sprintf (file_name, "%s/global_%d", manager->output_dir,chunk_id);
+	snprintf(file_name, sizeof(file_name), "%s/global_%d", manager->output_dir,chunk_id);
 
 	OpenBinaryFileAppend (&(outputFP), file_name);
 	Fwrite (manager->output_buffers[chunk_id], sizeof (long), manager->output_buffer_positions[chunk_id], outputFP);
@@ -380,6 +380,5 @@ int main(int argc, char ** argv){
 	total_chunks = atoi(argv[3]);
 	long working_chunk_size = parse_chunk_size(argv[4]);
 
-	reduce(input_dir, output_dir, total_chunks, working_chunk_size);
-	return SUCCESS;
+	return reduce(input_dir, output_dir, total_chunks, working_chunk_size);
 }
