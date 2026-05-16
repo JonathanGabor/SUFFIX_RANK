@@ -8,7 +8,7 @@ make
 ./suffixrank.sh INPUT_FOLDER [CHUNK_SIZE] [WORD_LENGTH]
 ```
 CHUNK_SIZE:  positive power of 2 (default 16777216).
-  Note that the algorithm will use 40 times this amount of RAM.
+  Note that the algorithm will use 28 times this amount of RAM in bytes (so by default, it will use ~470 MB).
 
 WORD_LENGTH: bytes per symbol, 1..4 (default 1)
 

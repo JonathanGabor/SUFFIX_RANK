@@ -6,10 +6,25 @@
    the value a distance 2^h away.  It outputs runs of (curr, next, count)
  **/
 
+// runs_buffer is sized at working_chunk_size/3 — flush to runsFP whenever it
+// fills up.
+static inline void emit_run(RunRecord rec, RunRecord *out_buf, int *out_count,
+                            int capacity, FILE *runsFP) {
+	if (*out_count == capacity) {
+		Fwrite(out_buf, sizeof(RunRecord), capacity, runsFP);
+		*out_count = 0;
+		if (TEST_PERFORMANCE) {
+			fprintf(stderr, "refine: runs_buffer flushed mid-chunk (cap=%d)\n", capacity);
+		}
+	}
+	out_buf[(*out_count)++] = rec;
+}
+
 //create RunRecord triplet and sort
 void sort_and_output_group(int * sa_buffer, long * next_ranks_buffer, long current_rank,
                            int start_interval, int end_interval,
-                           RunRecord * out_buf, int * out_count){
+                           RunRecord * out_buf, int * out_count,
+                           int capacity, FILE *runsFP){
 
 	int i;
 	tsort(&sa_buffer[start_interval], next_ranks_buffer, end_interval-start_interval);
@@ -22,7 +37,7 @@ void sort_and_output_group(int * sa_buffer, long * next_ranks_buffer, long curre
   //find runs and append them to output buffer
 	for (i = start_interval+1; i < end_interval; i++) {
 		if (next_ranks_buffer[sa_buffer[i]] != output.nextRank) {
-			out_buf[(*out_count)++] = output;
+			emit_run(output, out_buf, out_count, capacity, runsFP);
 			output.count = 1;
 			output.nextRank = next_ranks_buffer[sa_buffer[i]];
 		}
@@ -30,7 +45,7 @@ void sort_and_output_group(int * sa_buffer, long * next_ranks_buffer, long curre
 			output.count++;
 		}
 	}
-	out_buf[(*out_count)++] = output;
+	emit_run(output, out_buf, out_count, capacity, runsFP);
 }
 
 int generate_local_runs (char * rank_dir, char * runs_dir, int total_chunks,
@@ -87,7 +102,7 @@ int generate_local_runs (char * rank_dir, char * runs_dir, int total_chunks,
 		fread (next_ranks_buffer, sizeof (long), working_chunk_size, nextFP);
 		fclose(nextFP);
 	}
-  else {
+  	else {
 		snprintf(next_ranks_file_name, sizeof next_ranks_file_name, "%s/ranks_%d", rank_dir, chunk_id);
 		OpenBinaryFileRead (&nextFP, next_ranks_file_name);
 		long offset = (1L << h) * (long)sizeof(long);
@@ -122,6 +137,7 @@ int generate_local_runs (char * rank_dir, char * runs_dir, int total_chunks,
 	long previous_rank = current_ranks_buffer[sa_buffer[0]];
 	long current_rank;
 	int out_count = 0;
+	int runs_capacity = (int)(working_chunk_size / 3);
 
   //Read through current_ranks_buffer until it changes.  Then sort based on next_rank.
 	for (i=1; i < total_records; i++) {
@@ -129,13 +145,15 @@ int generate_local_runs (char * rank_dir, char * runs_dir, int total_chunks,
 		if (current_rank != previous_rank) {
 			//sort, generate runs
 			sort_and_output_group(sa_buffer, next_ranks_buffer, previous_rank,
-				                      start_interval, i, runs_buffer, &out_count);
+				                      start_interval, i, runs_buffer, &out_count,
+				                      runs_capacity, runsFP);
 			start_interval = i;
 			previous_rank = current_rank;
 		}
 	}
 	sort_and_output_group(sa_buffer, next_ranks_buffer, previous_rank,
-		                      start_interval, total_records, runs_buffer, &out_count);
+		                      start_interval, total_records, runs_buffer, &out_count,
+		                      runs_capacity, runsFP);
 
 	Fwrite(runs_buffer, sizeof(RunRecord), out_count, runsFP);
 	fclose(runsFP);
@@ -168,7 +186,7 @@ int main(int argc, char ** argv){
   long *current_ranks_buffer = (long *) Calloc ((size_t)working_chunk_size * sizeof (long));
   long *next_ranks_buffer = (long *) Calloc ((size_t)working_chunk_size * sizeof (long));
   int *sa_buffer = (int *) Calloc ((size_t)working_chunk_size * sizeof (int));
-  RunRecord *runs_buffer = (RunRecord *) Calloc ((size_t)working_chunk_size * sizeof (RunRecord));
+  RunRecord *runs_buffer = (RunRecord *) Calloc ((size_t)(working_chunk_size / 3) * sizeof (RunRecord));
 
   int more_runs = EMPTY;
   for (chunk_id=0; chunk_id<total_chunks; chunk_id++) {
