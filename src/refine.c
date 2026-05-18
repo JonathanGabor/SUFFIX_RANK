@@ -89,12 +89,6 @@ int generate_local_runs (char * rank_dir, char * runs_dir, int total_chunks,
 	OpenBinaryFileRead (&currentFP, current_ranks_file_name);
 	OpenBinaryFileReadWrite (&saFP, sa_file_name);
 
-	// Buffers are reused across chunks within the same refine pass: zero them
-	// before each chunk so positions that read past EOF (or past a partial
-	// chunk) see deterministic zero next-ranks instead of stale data from the
-	// previous iteration.
-	memset(next_ranks_buffer, 0, (size_t)working_chunk_size * sizeof(long));
-
 	//handle reading next_rank
 	if (next_chunk_dist) {
 		snprintf(next_ranks_file_name, sizeof next_ranks_file_name, "%s/ranks_%d", rank_dir, (int)(chunk_id+next_chunk_dist));
@@ -122,7 +116,7 @@ int generate_local_runs (char * rank_dir, char * runs_dir, int total_chunks,
 
 	//offset next rank by 2^h
 	//read file by chunk, sort and generate triplet for each chunk
-	memset(current_ranks_buffer, 0, (size_t)working_chunk_size * sizeof(long));
+	//memset(current_ranks_buffer, 0, (size_t)working_chunk_size * sizeof(long));
 	fread (current_ranks_buffer, sizeof (long), working_chunk_size, currentFP);
   fclose (currentFP);
 

@@ -9,6 +9,9 @@ default: all
 
 all: init refine update merge create_pairs invert verify
 
+profile: CFLAGS += -g -fno-omit-frame-pointer
+profile: clean all
+
 init: init.c utils.c input_stream.c
 	$(CC) $(CFLAGS) init.c utils.c input_stream.c -o init
 
