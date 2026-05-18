@@ -19,7 +19,7 @@
 #define ABSOLUTE(a) (((a) > (0)) ? (a) : ((0)-(a)))
 #define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
 #define MAX(X, Y) (((X) > (Y)) ? (X) : (Y))
-#define SWAP(p, q)      (tmp=*(p), *(p)=*(q), *(q)=tmp)
+#define SWAP(p, q)      (tmp=sa[(p)], sa[(p)]=sa[(q)], sa[(q)]=tmp)
 #define MED3(a, b, c)   (a<b) ?                        \
         ((b<c) ? (b) : ((a<c) ? (c) : (a)))       \
         : ((b>c) ? (b) : ((a>c) ? (c) : (a)))
