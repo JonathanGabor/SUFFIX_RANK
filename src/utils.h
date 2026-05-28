@@ -19,18 +19,17 @@
 #define ABSOLUTE(a) (((a) > (0)) ? (a) : ((0)-(a)))
 #define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
 #define MAX(X, Y) (((X) > (Y)) ? (X) : (Y))
-#define SWAP(p, q)      (tmp=*(p), *(p)=*(q), *(q)=tmp)
+#define SWAP(p, q)      (tmp=sa[(p)], sa[(p)]=sa[(q)], sa[(q)]=tmp)
 #define MED3(a, b, c)   (a<b) ?                        \
         ((b<c) ? (b) : ((a<c) ? (c) : (a)))       \
         : ((b>c) ? (b) : ((a>c) ? (c) : (a)))
 #define KEY(a) ABSOLUTE(next_ranks[sa[(a)]])
 
-// WORKING_CHUNK_SIZE and WORD_LENGTH are runtime parameters passed via the CLI
-// to each binary (see suffixrank.sh). chunk_size must be a positive power of 2;
-// word_length is the number of bytes per symbol (1..MAX_WORD_LENGTH).
+// WORKING_CHUNK_SIZE is a runtime parameter passed via the CLI to each binary
+// that needs it (see suffixrank.sh). chunk_size must be a positive power of 2.
+// The public pipeline is byte-alphabet only.
 #define DEFAULT_WORKING_CHUNK_SIZE 16777216L
-#define DEFAULT_WORD_LENGTH 1
-#define MAX_WORD_LENGTH 4
+#define BYTE_ALPHABET_SIZE 256L
 
 #define SUCCESS 0
 #define FAILURE 1
@@ -51,6 +50,5 @@ void Fwrite (const void *buffer, size_t elem_size, size_t num_elements, FILE *fp
 void * Calloc (size_t num_bytes);
 void tsort(int *sa, long *next_ranks, int n);
 long parse_chunk_size (const char *arg);
-int parse_word_length (const char *arg);
 
 #endif

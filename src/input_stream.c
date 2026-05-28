@@ -41,14 +41,13 @@ void free_sorted_files(char **files, int n) {
 	free(files);
 }
 
-int input_stream_open(InputStream *s, const char *input_dir, int word_length) {
+int input_stream_open(InputStream *s, const char *input_dir) {
 	s->files = collect_sorted_files(input_dir, &s->n_files);
 	if (s->n_files == 0) {
 		fprintf(stderr, "No input files in %s\n", input_dir);
 		return FAILURE;
 	}
 	s->cur_file = 0;
-	s->word_length = word_length;
 	s->fp = NULL;
 	s->pending_sentinel = 0;
 	return SUCCESS;
@@ -69,27 +68,14 @@ int input_stream_next(InputStream *s, uint32_t *out_char, int *out_sent_id) {
 		OpenBinaryFileRead(&s->fp, s->files[s->cur_file]);
 	}
 
-	uint8_t bytes[MAX_WORD_LENGTH];
-	size_t got = fread(bytes, 1, (size_t) s->word_length, s->fp);
-	if (got == 0) {
+	int byte = fgetc(s->fp);
+	if (byte == EOF) {
 		fclose(s->fp);
 		s->fp = NULL;
 		s->pending_sentinel = 1;
 		return input_stream_next(s, out_char, out_sent_id);
 	}
-	if ((int) got != s->word_length) {
-		fprintf(stderr,
-		        "File %s has %zu trailing byte(s) that don't fill a word_length=%d symbol\n",
-		        s->files[s->cur_file], got, s->word_length);
-		fclose(s->fp);
-		s->fp = NULL;
-		return FAILURE;
-	}
-
-	uint32_t v = 0;
-	int i;
-	for (i = 0; i < s->word_length; i++) v = (v << 8) | bytes[i];
-	*out_char = v + 1;
+	*out_char = (uint32_t) byte + 1;
 	*out_sent_id = -1;
 	return SUCCESS;
 }

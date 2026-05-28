@@ -5,15 +5,30 @@ CFLAGS += -D_LARGEFILE_SOURCE
 CFLAGS += -fno-exceptions
 CFLAGS += -funroll-loops
 
+CXX = g++
+CXXFLAGS = -O3 -Wall
+CXXFLAGS += -D_FILE_OFFSET_BITS=64
+CXXFLAGS += -D_LARGEFILE_SOURCE
+CXXFLAGS += -funroll-loops
+
+DIVSUFSORT_PREFIX ?= /usr/local
+DSS_INC ?= -I$(DIVSUFSORT_PREFIX)/include
+DSS_LIB ?= $(DIVSUFSORT_PREFIX)/lib/libdivsufsort.a
+
+-include Makefile.local
+
 default: all
 
 all: init refine update merge create_pairs invert verify
 
-init: init.c utils.c input_stream.c
-	$(CC) $(CFLAGS) init.c utils.c input_stream.c -o init
+profile: CFLAGS += -g -fno-omit-frame-pointer
+profile: clean all
 
-refine: refine.c utils.c
-	$(CC) $(CFLAGS) refine.c utils.c -o refine
+init: init.cpp utils_c.o input_stream_c.o bitvector.hpp srank.hpp
+	$(CXX) $(CXXFLAGS) $(DSS_INC) init.cpp utils_c.o input_stream_c.o -o init $(DSS_LIB)
+
+refine: refine.cpp utils_c.o
+	$(CXX) $(CXXFLAGS) refine.cpp utils_c.o -o refine
 
 merge: merge.c utils.c
 	$(CC) $(CFLAGS) merge.c utils.c -o merge
@@ -30,5 +45,11 @@ invert: invert.c utils.c
 verify: verify.c utils.c input_stream.c
 	$(CC) $(CFLAGS) verify.c utils.c input_stream.c -o verify
 
+utils_c.o: utils.c utils.h
+	$(CC) $(CFLAGS) -c utils.c -o utils_c.o
+
+input_stream_c.o: input_stream.c input_stream.h utils.h
+	$(CC) $(CFLAGS) -c input_stream.c -o input_stream_c.o
+
 clean:
-	rm -f init refine merge update create_pairs invert verify
+	rm -f init refine merge update create_pairs invert verify utils_c.o input_stream_c.o

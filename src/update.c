@@ -24,13 +24,8 @@ int update_local_ranks (char * rank_dir, char * temp_dir, int total_chunks, int 
 	// after previous iteration - with 2 file pointers
 	snprintf(file_name, sizeof file_name, "%s/ranks_%d", rank_dir, chunk_id);
 	OpenBinaryFileReadWrite (&current_FP, file_name);
-	memset(buffer_current, 0, (size_t)working_chunk_size * sizeof(long));
+	//memset(buffer_current, 0, (size_t)working_chunk_size * sizeof(long));
 	total_ranks = fread (buffer_current, sizeof(long), working_chunk_size, current_FP);
-
-	// Buffers carry over across chunks within this update pass — zero them so
-	// any reads that fall past valid data see deterministic zeros, not stale
-	// values from the prior chunk.
-	memset(buffer_next, 0, (size_t)working_chunk_size * sizeof(long));
 
 	//handle reading next_rank
 	if (next_chunk_dist) {

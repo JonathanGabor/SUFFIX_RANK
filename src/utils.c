@@ -26,19 +26,6 @@ long parse_chunk_size (const char *arg) {
 	return value;
 }
 
-// Parse a word-length CLI argument. Must be in [1, MAX_WORD_LENGTH].
-int parse_word_length (const char *arg) {
-	char *end = NULL;
-	long value = strtol(arg, &end, 10);
-	if (end == arg || *end != '\0' || value < 1 || value > MAX_WORD_LENGTH) {
-		fprintf(stderr, "Invalid word_length \"%s\": must be an integer in [1, %d]\n",
-		        arg, MAX_WORD_LENGTH);
-		exit(1);
-	}
-	return (int) value;
-}
-
-
 void OpenBinaryFileRead (FILE ** fp, char * file_name) {
 	if(!(*fp= fopen ( file_name, "rb" )))  {
 		perror("Error:");
@@ -102,7 +89,7 @@ void tsort(int *sa, long *next_ranks, int n){
 		for (i = 1; i < n; i++) {
 			int j = i;
 			while (KEY(j) < KEY(j-1)) {
-				SWAP(&sa[j], &sa[j-1]);
+				SWAP(j, j-1);
 				j--;
 				if (j==0) break;
 			}
@@ -127,32 +114,32 @@ void tsort(int *sa, long *next_ranks, int n){
 	for (;;) {
 		while (b <= c && v >= KEY(b)) {
 			if (v == KEY(b)) {
-				SWAP(&sa[a], &sa[b]);
+				SWAP(a, b);
 				a++;
 			}
 			b++;
 		}
 		while (c >= b && KEY(c) >= v) {
 			if (v == KEY(c)) {
-				SWAP(&sa[d], &sa[c]);
+				SWAP(d, c);
 				d--;
 			}
 			c--;
 		}
 		if (b > c) break;
-		SWAP(&sa[b], &sa[c]);
+		SWAP(b, c);
 		b++;
 		c--;
 	}
 	s = MIN(a, b-a);
 	for(l = 0, h = b-s; s; s--) {
-		SWAP(&sa[l], &sa[h]);
+		SWAP(l, h);
 		l++;
 		h++;
 	}
 	s = MIN(d-c, n-1-d);
 	for(l = b, h = n-s; s; s--) {
-		SWAP(&sa[l], &sa[h]);
+		SWAP(l, h);
 		l++;
 		h++;
 	}
