@@ -11,8 +11,11 @@ CXXFLAGS += -D_FILE_OFFSET_BITS=64
 CXXFLAGS += -D_LARGEFILE_SOURCE
 CXXFLAGS += -funroll-loops
 
-DSS_INC = -I/Users/jonathangabor/programming/libdivsufsort/build/include
-DSS_LIB = /Users/jonathangabor/programming/libdivsufsort/build/lib/libdivsufsort.a
+DIVSUFSORT_PREFIX ?= /usr/local
+DSS_INC ?= -I$(DIVSUFSORT_PREFIX)/include
+DSS_LIB ?= $(DIVSUFSORT_PREFIX)/lib/libdivsufsort.a
+
+-include Makefile.local
 
 default: all
 

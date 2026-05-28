@@ -7,14 +7,30 @@ SUFFIX_RANK is an out-of-core suffix array construction implementation. The defa
 ```
 cd src
 make
-./suffixrank.sh INPUT_FOLDER [CHUNK_SIZE] [WORD_LENGTH] [--verify]
+./suffixrank.sh INPUT_FOLDER [CHUNK_SIZE] [--verify]
 ```
 CHUNK_SIZE:  positive power of 2 (default 16777216).
   Note that the algorithm will use 28 times this amount of RAM in bytes (so by default, it will use ~470 MB).
 
-WORD_LENGTH: must be 1. The divsufsort path currently works on byte alphabets only.
-
 --verify: verify the correctness of the suffix array after creation
+
+The divsufsort path currently works on byte alphabets only.
+
+### Dependency
+
+Install [y-256/libdivsufsort](https://github.com/y-256/libdivsufsort) before building. The Makefile defaults to `DIVSUFSORT_PREFIX=/usr/local`; override it on the command line if needed:
+
+```
+make DIVSUFSORT_PREFIX=/path/to/libdivsufsort/install
+```
+
+For a persistent local override, create `src/Makefile.local`
+
+```
+DIVSUFSORT_PREFIX = /path/to/libdivsufsort/install
+```
+
+You can also override `DSS_INC` and `DSS_LIB` directly there if your install layout is unusual.
 
 Sample input folder can be downloaded from [here](https://drive.google.com/file/d/1B9muEMI97aF8-Zj_SCxHzA1tMCjtNCbR/view).  Larger inputs are available [here](https://barsky.ca/marina/SR/suffix_rank/index.html#datasets-link).
 

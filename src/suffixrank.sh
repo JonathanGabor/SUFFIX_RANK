@@ -38,9 +38,8 @@ set -- "${POSITIONAL[@]}"
 
 if [[ -z "$1" ]] || [[ ! -d "$1" ]]
 then
-    echo "Usage: $0 INPUT_FOLDER [CHUNK_SIZE] [WORD_LENGTH] [--verify]"
+    echo "Usage: $0 INPUT_FOLDER [CHUNK_SIZE] [--verify]"
     echo "  CHUNK_SIZE:  positive power of 2 (default 16777216)"
-    echo "  WORD_LENGTH: must be 1"
     echo "  --verify:    run external-memory correctness checker after pipeline"
     exit 1
 fi
@@ -59,12 +58,7 @@ if (( (CHUNK_SIZE & (CHUNK_SIZE - 1)) != 0 )); then
     exit 1
 fi
 
-WORD_LENGTH="${3:-1}"
-if [[ "$WORD_LENGTH" != "1" ]]; then
-    echo "init only supports word_length=1 (got '$WORD_LENGTH')"
-    exit 1
-fi
-echo "Using chunk size: $CHUNK_SIZE, word_length: $WORD_LENGTH (divsufsort path)"
+echo "Using chunk size: $CHUNK_SIZE (byte alphabet, divsufsort path)"
 
 #prepare directory structure for processing
 for dir in "$RANK_DIR" "$OUTPUT_DIR" "$TEMP_DIR" "$CHUNKS_DIR"; do
@@ -77,7 +71,7 @@ done
 
 #Part 1. Initial partial suffix sort: read source files directly, write ranks_* and sa_* chunks.
 START=$($DATE)
-./init "$INPUT_DIR" "$RANK_DIR" "$CHUNKS_DIR" "$CHUNK_SIZE" "$WORD_LENGTH"
+./init "$INPUT_DIR" "$RANK_DIR" "$CHUNKS_DIR" "$CHUNK_SIZE"
 STATUS=$?
 
 if [[ $STATUS -eq $FAILURE ]]
@@ -188,7 +182,7 @@ printf "Total time: %.4f seconds\n\n" $DUR
 if (( RUN_VERIFY == 1 )); then
     rm -rf ${TEMP_DIR}/*
     START=$($DATE)
-    ./verify "$INPUT_DIR" "$RANK_DIR" "$OUTPUT_DIR" "$TEMP_DIR" $CHUNKS $CHUNK_SIZE $WORD_LENGTH
+    ./verify "$INPUT_DIR" "$RANK_DIR" "$OUTPUT_DIR" "$TEMP_DIR" $CHUNKS $CHUNK_SIZE
     STATUS=$?
     DUR=$(echo "$($DATE) - $START" | bc)
     printf "Verified in %.4f seconds\n" $DUR

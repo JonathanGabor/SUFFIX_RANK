@@ -63,6 +63,9 @@ dkms.conf
 *refine_dss
 *init_dss
 
+# Local build configuration
+src/Makefile.local
+
 # Folders
 *input/
 *ranks/

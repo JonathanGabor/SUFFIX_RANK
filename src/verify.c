@@ -49,9 +49,9 @@ static void pw_close(PartitionWriter *w) {
 
 static int verify_partition(const char *input_dir, const char *ranks_dir,
                             const char *tmp_dir, int total_chunks,
-                            long W, int word_length) {
+                            long W) {
 	InputStream stream;
-	if (input_stream_open(&stream, input_dir, word_length) != SUCCESS) {
+	if (input_stream_open(&stream, input_dir) != SUCCESS) {
 		return FAILURE;
 	}
 
@@ -265,8 +265,8 @@ static int verify_check(const char *sa_dir, const char *tmp_dir,
 }
 
 int main(int argc, char **argv) {
-	if (argc < 8) {
-		puts("Run ./verify <input_dir> <ranks_dir> <sa_dir> <tmp_dir> <total_chunks> <chunk_size> <word_length>");
+	if (argc < 7) {
+		puts("Run ./verify <input_dir> <ranks_dir> <sa_dir> <tmp_dir> <total_chunks> <chunk_size>");
 		return FAILURE;
 	}
 	const char *input_dir = argv[1];
@@ -275,14 +275,13 @@ int main(int argc, char **argv) {
 	const char *tmp_dir = argv[4];
 	int total_chunks = atoi(argv[5]);
 	long W = parse_chunk_size(argv[6]);
-	int word_length = parse_word_length(argv[7]);
 
 	if (total_chunks <= 0) {
 		fprintf(stderr, "total_chunks must be positive (got %d)\n", total_chunks);
 		return FAILURE;
 	}
 
-	if (verify_partition(input_dir, ranks_dir, tmp_dir, total_chunks, W, word_length) != SUCCESS)
+	if (verify_partition(input_dir, ranks_dir, tmp_dir, total_chunks, W) != SUCCESS)
 		return FAILURE;
 	if (verify_check(sa_dir, tmp_dir, total_chunks, W) != SUCCESS)
 		return FAILURE;

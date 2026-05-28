@@ -22,7 +22,6 @@ typedef struct verify_record {
 	int sent_id;        // file index when char_val==0 (sentinel), else -1
 } VerifyRecord;
 
-int count_characters (char *input_directory, char *output_directory, long working_chunk_size, int word_length);
 int generate_local_runs (char * rank_dir, char * runs_dir, int total_chunks, int chunk_id, int h,
                          long working_chunk_size,
                          long * current_ranks_buffer, long * next_ranks_buffer,
