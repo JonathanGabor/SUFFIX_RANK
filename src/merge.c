@@ -253,34 +253,20 @@ void heap_to_output_last ( Manager *manager, HeapElement *current, OutputElement
 
 int refill_buffer (Manager * manager, int chunk_id) {
 
-	char currentInputFileName[MAX_PATH_LENGTH];
 	int result;
-	FILE * inputFP = NULL;
 
 	if(manager->input_file_positions[chunk_id] == -1) {
 		manager->input_buffer_positions[chunk_id] = -1; //signifies no more elements
 		return EMPTY; //run is complete - no more elements in the input file
 	}
 
-	snprintf(currentInputFileName, sizeof(currentInputFileName), "%s/runs_%d", manager->input_dir, chunk_id);
-
-	OpenBinaryFileRead (&(inputFP), currentInputFileName);
-	result = fseek (inputFP , manager->input_file_positions[chunk_id]*sizeof (RunRecord) , SEEK_SET );
-
-	if (result!=SUCCESS) {
-		printf ("fseek failed on file %s trying to move to position %ld\n", currentInputFileName,
-			manager->input_file_positions[chunk_id]*sizeof (RunRecord) );
-		return FAILURE;
-	}
-
+	//the file pointer is left exactly where the previous read ended, so reads
+	//are sequential and no fseek is required
 	if ((result = fread (manager->input_buffers[chunk_id],
-			sizeof (RunRecord), manager->input_buffer_capacity, inputFP)) > 0) {
+			sizeof (RunRecord), manager->input_buffer_capacity, manager->input_fps[chunk_id])) > 0) {
 		manager->input_buffer_positions[chunk_id] = 0;
 		manager->input_buffer_lengths [chunk_id] = result;
 		manager->input_file_positions [chunk_id] += result;
-
-		fclose(inputFP);
-		inputFP = NULL;
 
 		if (result < manager->input_buffer_capacity) //no more reads
 			manager->input_file_positions [chunk_id] = -1;
@@ -289,8 +275,6 @@ int refill_buffer (Manager * manager, int chunk_id) {
 	//no more elements - we read exactly until the end of the file in the previous upload
 	manager->input_file_positions [chunk_id] = -1;
 	manager->input_buffer_positions[chunk_id] = -1;
-	fclose(inputFP);
-	inputFP = NULL;
 
 	return EMPTY;
 }
@@ -313,6 +297,10 @@ void clean_up(Manager * manager){
 	for (i=0; i<manager->total_chunks;i++)
 		free(manager->input_buffers [i]);
 	free(manager->input_buffers);
+
+	for (i=0; i<manager->total_chunks;i++)
+		if (manager->input_fps[i]) fclose(manager->input_fps[i]);
+	free(manager->input_fps);
 
 	free(manager->input_file_positions);
 	free(manager->input_buffer_positions);
@@ -337,6 +325,15 @@ void setup(Manager * manager){
 	if (manager->input_buffer_capacity < 1) manager->input_buffer_capacity = 1;
 	for (i=0; i<manager->total_chunks;i++)
 		manager->input_buffers [i] = (RunRecord *) Calloc ((size_t)manager->input_buffer_capacity *sizeof(RunRecord));
+
+	//open one persistent file pointer per chunk; reads are sequential so we never
+	//need to reopen or fseek during refills
+	manager->input_fps = (FILE **) Calloc (manager->total_chunks * sizeof(FILE *));
+	for (i=0; i<manager->total_chunks;i++) {
+		char file_name[MAX_PATH_LENGTH];
+		snprintf(file_name, sizeof(file_name), "%s/runs_%d", manager->input_dir, i);
+		OpenBinaryFileRead(&(manager->input_fps[i]), file_name);
+	}
 
 	//allocate position pointers
 	manager->input_buffer_positions  = (int *) Calloc (manager->total_chunks * sizeof(int));

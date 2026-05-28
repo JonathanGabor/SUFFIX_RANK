@@ -28,6 +28,7 @@ typedef struct merge_manager {
 	HeapElement last_transferred;             //last element transferred from heap to output buffer
 
 	int *input_file_positions;             //current position in each file, -1 if the run is complete
+	FILE **input_fps;                      //one open file pointer per chunk for sequential run reads
 
 	RunRecord **input_buffers; //array of buffers to hold part of each run
 	int *input_buffer_positions; //position in current input buffer, if no need to refill  - -1
