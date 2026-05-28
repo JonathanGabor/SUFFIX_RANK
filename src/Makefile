@@ -5,9 +5,18 @@ CFLAGS += -D_LARGEFILE_SOURCE
 CFLAGS += -fno-exceptions
 CFLAGS += -funroll-loops
 
+CXX = g++
+CXXFLAGS = -O3 -Wall
+CXXFLAGS += -D_FILE_OFFSET_BITS=64
+CXXFLAGS += -D_LARGEFILE_SOURCE
+CXXFLAGS += -funroll-loops
+
+DSS_INC = -I/Users/jonathangabor/programming/libdivsufsort/build/include
+DSS_LIB = /Users/jonathangabor/programming/libdivsufsort/build/lib/libdivsufsort.a
+
 default: all
 
-all: init refine update merge create_pairs invert verify
+all: init refine update merge create_pairs invert verify init_dss refine_dss
 
 profile: CFLAGS += -g -fno-omit-frame-pointer
 profile: clean all
@@ -33,5 +42,17 @@ invert: invert.c utils.c
 verify: verify.c utils.c input_stream.c
 	$(CC) $(CFLAGS) verify.c utils.c input_stream.c -o verify
 
+utils_c.o: utils.c utils.h
+	$(CC) $(CFLAGS) -c utils.c -o utils_c.o
+
+input_stream_c.o: input_stream.c input_stream.h utils.h
+	$(CC) $(CFLAGS) -c input_stream.c -o input_stream_c.o
+
+init_dss: init_dss.cpp utils_c.o input_stream_c.o bitvector.hpp srank.hpp
+	$(CXX) $(CXXFLAGS) $(DSS_INC) init_dss.cpp utils_c.o input_stream_c.o -o init_dss $(DSS_LIB)
+
+refine_dss: refine_dss.cpp utils_c.o
+	$(CXX) $(CXXFLAGS) refine_dss.cpp utils_c.o -o refine_dss
+
 clean:
-	rm -f init refine merge update create_pairs invert verify
+	rm -f init refine merge update create_pairs invert verify init_dss refine_dss utils_c.o input_stream_c.o

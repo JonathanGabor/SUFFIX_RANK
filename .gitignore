@@ -60,6 +60,8 @@ dkms.conf
 *merge
 *update
 *verify
+*refine_dss
+*init_dss
 
 # Folders
 *input/
