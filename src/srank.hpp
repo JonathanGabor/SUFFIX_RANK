@@ -1,4 +1,6 @@
-// Port of /Users/jonathangabor/programming/SAscan-0.1.1/src/srank.h.
+// Port of SAscan's src/srank.h.
+// Original SAscan code copyright (c) 2014 Juha Karkkainen and Dominik Kempa,
+// MIT licensed. See README.md for the full acknowledgement.
 // Crochemore-style string range matching from
 //   Juha Kärkkäinen, Dominik Kempa, Simon J. Puglisi:
 //   String Range Matching. In Proc. CPM 2014
@@ -11,7 +13,7 @@
 #include "bitvector.hpp"
 
 // Maximal-suffix decomposition update; helper for the Crochemore matcher.
-// Renamed from sascan's `next` to avoid collisions in C++ namespaces.
+// Renamed from SAscan's `next` to avoid collisions in C++ namespaces.
 inline void srank_next(unsigned char *text, long length,
                        long &s, long &p, long &r) {
   if (length == 1) { s = 0; p = 1; r = 0; return; }

@@ -1,5 +1,6 @@
 #!/bin/bash
 
+# Drives the default divsufsort/SAscan-based pipeline.
 
 if date +%s.%N &>/dev/null; then
     timestamp() { date +%s.%N; }
@@ -12,6 +13,7 @@ DATE=timestamp
 TEMP_DIR=tmp
 RANK_DIR=ranks
 OUTPUT_DIR=output
+CHUNKS_DIR=chunks
 
 SUCCESS=0
 FAILURE=1
@@ -38,18 +40,15 @@ if [[ -z "$1" ]] || [[ ! -d "$1" ]]
 then
     echo "Usage: $0 INPUT_FOLDER [CHUNK_SIZE] [WORD_LENGTH] [--verify]"
     echo "  CHUNK_SIZE:  positive power of 2 (default 16777216)"
-    echo "  WORD_LENGTH: bytes per symbol, 1..4 (default 1)"
+    echo "  WORD_LENGTH: must be 1"
     echo "  --verify:    run external-memory correctness checker after pipeline"
     exit 1
 fi
 
 INPUT_DIR=$(cd "$1" && pwd)
 
-# Run relative to the script's own directory so ./init, ranks/, tmp/, output/
-# resolve correctly regardless of the caller's working directory.
 cd "$(dirname "$0")"
 
-# Parse optional chunk size (must be a positive power of 2).
 CHUNK_SIZE="${2:-16777216}"
 if ! [[ "$CHUNK_SIZE" =~ ^[0-9]+$ ]] || (( CHUNK_SIZE <= 0 )); then
     echo "Invalid chunk size '$CHUNK_SIZE': must be a positive integer"
@@ -60,16 +59,15 @@ if (( (CHUNK_SIZE & (CHUNK_SIZE - 1)) != 0 )); then
     exit 1
 fi
 
-# Parse optional word length (1..4).
 WORD_LENGTH="${3:-1}"
-if ! [[ "$WORD_LENGTH" =~ ^[0-9]+$ ]] || (( WORD_LENGTH < 1 || WORD_LENGTH > 4 )); then
-    echo "Invalid word_length '$WORD_LENGTH': must be an integer in [1, 4]"
+if [[ "$WORD_LENGTH" != "1" ]]; then
+    echo "init only supports word_length=1 (got '$WORD_LENGTH')"
     exit 1
 fi
-echo "Using chunk size: $CHUNK_SIZE, word_length: $WORD_LENGTH"
+echo "Using chunk size: $CHUNK_SIZE, word_length: $WORD_LENGTH (divsufsort path)"
 
 #prepare directory structure for processing
-for dir in "$RANK_DIR" "$OUTPUT_DIR" "$TEMP_DIR"; do
+for dir in "$RANK_DIR" "$OUTPUT_DIR" "$TEMP_DIR" "$CHUNKS_DIR"; do
     if [[ -d "$dir" ]]; then
         rm -rf "${dir:?}"/*
     else
@@ -77,9 +75,9 @@ for dir in "$RANK_DIR" "$OUTPUT_DIR" "$TEMP_DIR"; do
     fi
 done
 
-#Part 1. Initial bucket sort: read source files directly, write ranks_* and sa_* chunks.
+#Part 1. Initial partial suffix sort: read source files directly, write ranks_* and sa_* chunks.
 START=$($DATE)
-./init "$INPUT_DIR" "$RANK_DIR" "$CHUNK_SIZE" "$WORD_LENGTH"
+./init "$INPUT_DIR" "$RANK_DIR" "$CHUNKS_DIR" "$CHUNK_SIZE" "$WORD_LENGTH"
 STATUS=$?
 
 if [[ $STATUS -eq $FAILURE ]]
@@ -97,7 +95,6 @@ printf "Finished initializing in %.4f, total %d chunks\n" $DUR $CHUNKS
 H=0
 
 #Part 3. Perform O(log N) iterations of an algorithm
-# main loop
 MORE_RUNS=1
 
 while (( $MORE_RUNS == 1 ))
@@ -107,7 +104,6 @@ do
     #clean temp directory for the next iteration
     rm -rf ${TEMP_DIR}/*
 
-    #generate sorted runs with counts and local rank pairs grouped by file_id and interval_id
     ./refine ${RANK_DIR} ${TEMP_DIR} $CHUNKS $H $CHUNK_SIZE
     STATUS=$?
 
@@ -122,11 +118,10 @@ do
     fi
     DUR=$(echo "$($DATE) - $START" | bc)
     printf "Refined ranks for iteration %d in %.4f seconds\n" $H $DUR
-    #only if there are ranks to be resolved - continue
+
     if [[ $MORE_RUNS -eq 1 ]]
     then
         START=$($DATE)
-        #merge local ranks into global ranks - from all the chunks
         ./merge ${TEMP_DIR} ${TEMP_DIR} $CHUNKS $CHUNK_SIZE
         STATUS=$?
 
@@ -138,11 +133,9 @@ do
         DUR=$(echo "$($DATE) - $START" | bc)
         printf "Resolved global ranks for iteration %d in %.4f seconds\n" $H $DUR
 
-        #at least something was resolved
         if [[ $STATUS -ne $EMPTY ]]
         then
           START=$($DATE)
-            #update local ranks with resolved global ranks
             ./update ${RANK_DIR} ${TEMP_DIR} $CHUNKS $H $CHUNK_SIZE
             STATUS=$?
 
@@ -192,8 +185,6 @@ printf "Inverted in %.4f seconds\n" $DUR
 DUR=$(echo "$($DATE) - $TRUESTART" | bc)
 printf "Total time: %.4f seconds\n\n" $DUR
 
-# Optional external-memory correctness check. Runs before the tmp cleanup
-# because verify uses tmp/ for its partition files.
 if (( RUN_VERIFY == 1 )); then
     rm -rf ${TEMP_DIR}/*
     START=$($DATE)
@@ -209,5 +200,6 @@ fi
 
 #clean temp directory
 rm -rf ${TEMP_DIR}/*
+rm -rf ${CHUNKS_DIR}/*
 
 exit 0

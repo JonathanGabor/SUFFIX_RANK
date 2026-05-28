@@ -3,7 +3,7 @@
 
 #include "utils.h"
 
-// Iterator over the symbol stream defined in init.c:
+// Iterator over the symbol stream defined by init.cpp and verify.c:
 //   * regular files in `input_dir`, enumerated in sorted lexicographic order
 //   * each `word_length` consecutive bytes packed big-endian into a uint32_t
 //   * real symbol values shifted by +1, so 0 is reserved as the per-file

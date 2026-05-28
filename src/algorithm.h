@@ -18,7 +18,7 @@ typedef struct verify_record {
 	long rank;          // ISA[p]; non-positive in this codebase's sign convention
 	long position;      // global position p
 	long next_rank;     // ranks_*[p+1], or LONG_MAX if p == N-1 (sorts shorter first)
-	uint32_t char_val;  // T[p] in init.c's encoding: 0 = sentinel, packed_value+1 = real
+	uint32_t char_val;  // T[p] in init.cpp's rank encoding: 0 = sentinel, packed_value+1 = real
 	int sent_id;        // file index when char_val==0 (sentinel), else -1
 } VerifyRecord;
 

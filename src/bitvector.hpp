@@ -7,7 +7,9 @@
 #include <algorithm>
 #include <string>
 
-// Plain self-contained port of sascan/src/bitvector.h.
+// Plain self-contained port of SAscan's src/bitvector.h.
+// Original SAscan code copyright (c) 2014 Juha Karkkainen and Dominik Kempa,
+// MIT licensed. See README.md for the full acknowledgement.
 // Storage is a packed byte array; bit i lives in m_data[i>>3] at position (i&7).
 struct bitvector {
   long m_alloc_bytes;

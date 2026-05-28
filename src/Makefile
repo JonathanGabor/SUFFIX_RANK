@@ -16,16 +16,16 @@ DSS_LIB = /Users/jonathangabor/programming/libdivsufsort/build/lib/libdivsufsort
 
 default: all
 
-all: init refine update merge create_pairs invert verify init_dss refine_dss
+all: init refine update merge create_pairs invert verify
 
 profile: CFLAGS += -g -fno-omit-frame-pointer
 profile: clean all
 
-init: init.c utils.c input_stream.c
-	$(CC) $(CFLAGS) init.c utils.c input_stream.c -o init
+init: init.cpp utils_c.o input_stream_c.o bitvector.hpp srank.hpp
+	$(CXX) $(CXXFLAGS) $(DSS_INC) init.cpp utils_c.o input_stream_c.o -o init $(DSS_LIB)
 
-refine: refine.c utils.c
-	$(CC) $(CFLAGS) refine.c utils.c -o refine
+refine: refine.cpp utils_c.o
+	$(CXX) $(CXXFLAGS) refine.cpp utils_c.o -o refine
 
 merge: merge.c utils.c
 	$(CC) $(CFLAGS) merge.c utils.c -o merge
@@ -48,11 +48,5 @@ utils_c.o: utils.c utils.h
 input_stream_c.o: input_stream.c input_stream.h utils.h
 	$(CC) $(CFLAGS) -c input_stream.c -o input_stream_c.o
 
-init_dss: init_dss.cpp utils_c.o input_stream_c.o bitvector.hpp srank.hpp
-	$(CXX) $(CXXFLAGS) $(DSS_INC) init_dss.cpp utils_c.o input_stream_c.o -o init_dss $(DSS_LIB)
-
-refine_dss: refine_dss.cpp utils_c.o
-	$(CXX) $(CXXFLAGS) refine_dss.cpp utils_c.o -o refine_dss
-
 clean:
-	rm -f init refine merge update create_pairs invert verify init_dss refine_dss utils_c.o input_stream_c.o
+	rm -f init refine merge update create_pairs invert verify utils_c.o input_stream_c.o
