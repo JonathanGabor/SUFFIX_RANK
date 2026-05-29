@@ -29,8 +29,8 @@ static inline void emit_run(RunRecord rec, RunRecord *out_buf, int *out_count,
 
 static int generate_local_runs_fast(char *rank_dir, char *runs_dir, int total_chunks,
                                     int chunk_id, int h, long working_chunk_size,
-                                    long *current_ranks_buffer,
-                                    long *next_ranks_buffer,
+                                    int32_t *current_ranks_buffer,
+                                    int32_t *next_ranks_buffer,
                                     int *sa_buffer,
                                     RunRecord *runs_buffer) {
 	char runs_file_name[MAX_PATH_LENGTH];
@@ -64,30 +64,30 @@ static int generate_local_runs_fast(char *rank_dir, char *runs_dir, int total_ch
 		snprintf(next_ranks_file_name, sizeof next_ranks_file_name,
 		         "%s/ranks_%d", rank_dir, (int) (chunk_id + next_chunk_dist));
 		OpenBinaryFileRead(&nextFP, next_ranks_file_name);
-		fread(next_ranks_buffer, sizeof(long), (size_t) working_chunk_size, nextFP);
+		fread(next_ranks_buffer, sizeof(int32_t), (size_t) working_chunk_size, nextFP);
 		fclose(nextFP);
 	} else {
 		snprintf(next_ranks_file_name, sizeof next_ranks_file_name,
 		         "%s/ranks_%d", rank_dir, chunk_id);
 		OpenBinaryFileRead(&nextFP, next_ranks_file_name);
-		long offset = (1L << h) * (long) sizeof(long);
+		long offset = (1L << h) * (long) sizeof(int32_t);
 		if (fseek(nextFP, offset, SEEK_SET)) {
 			printf("Fseek failed trying to move to position %ld in ranks file\n", 1L << h);
 			exit(1);
 		}
-		long r = (long) fread(next_ranks_buffer, sizeof(long),
+		long r = (long) fread(next_ranks_buffer, sizeof(int32_t),
 		                      (size_t) working_chunk_size, nextFP);
 		fclose(nextFP);
 		if (chunk_id + 1 < total_chunks) {
 			snprintf(next_ranks_file_name, sizeof next_ranks_file_name,
 			         "%s/ranks_%d", rank_dir, chunk_id + 1);
 			OpenBinaryFileRead(&nextFP, next_ranks_file_name);
-			fread(next_ranks_buffer + r, sizeof(long), (size_t) (1L << h), nextFP);
+			fread(next_ranks_buffer + r, sizeof(int32_t), (size_t) (1L << h), nextFP);
 			fclose(nextFP);
 		}
 	}
 
-	fread(current_ranks_buffer, sizeof(long), (size_t) working_chunk_size, currentFP);
+	fread(current_ranks_buffer, sizeof(int32_t), (size_t) working_chunk_size, currentFP);
 	fclose(currentFP);
 
 	int total_records = (int) fread(sa_buffer, sizeof(int),
@@ -141,8 +141,8 @@ int main(int argc, char **argv) {
 	int h = atoi(argv[4]);
 	long working_chunk_size = parse_chunk_size(argv[5]);
 
-	long *current_ranks_buffer = (long *) Calloc((size_t) working_chunk_size * sizeof(long));
-	long *next_ranks_buffer    = (long *) Calloc((size_t) working_chunk_size * sizeof(long));
+	int32_t *current_ranks_buffer = (int32_t *) Calloc((size_t) working_chunk_size * sizeof(int32_t));
+	int32_t *next_ranks_buffer    = (int32_t *) Calloc((size_t) working_chunk_size * sizeof(int32_t));
 	int  *sa_buffer            = (int *)  Calloc((size_t) working_chunk_size * sizeof(int));
 	RunRecord *runs_buffer     = (RunRecord *) Calloc((size_t) (working_chunk_size / 3) * sizeof(RunRecord));
 

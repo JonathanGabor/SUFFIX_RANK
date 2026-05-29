@@ -4,7 +4,7 @@
 #include <stdlib.h>
 
 void create_pairs(char * ranks_dir, char * output_dir, int chunk_id, int total_chunks,
-                  long working_chunk_size, long * current_rank, InverseRecord * inverse_buffer) {
+                  long working_chunk_size, int32_t * current_rank, InverseRecord * inverse_buffer) {
 	int i;
 	InverseRecord output;
 
@@ -17,13 +17,13 @@ void create_pairs(char * ranks_dir, char * output_dir, int chunk_id, int total_c
 	snprintf(ranks_file_name, sizeof ranks_file_name, "%s/ranks_%d", ranks_dir, chunk_id);
 
 	OpenBinaryFileRead(&ranksFP, ranks_file_name);
-	int num_elements = fread(current_rank, sizeof(long), working_chunk_size, ranksFP);
+	int num_elements = fread(current_rank, sizeof(int32_t), working_chunk_size, ranksFP);
 	fclose(ranksFP);
 
 	long *bucket_starts = (long *) Calloc(total_chunks * sizeof(long));
 
 	for (i=0; i < num_elements; i++) {
-		bucket_starts[-1 * current_rank[i] / working_chunk_size]++;
+		bucket_starts[(-(long) current_rank[i]) / working_chunk_size]++;
 	}
 
 	long sum = 0;
@@ -36,7 +36,7 @@ void create_pairs(char * ranks_dir, char * output_dir, int chunk_id, int total_c
 
 	for (i=0; i < num_elements; i++) {
 		output.index = (long)i + (long)chunk_id * working_chunk_size;
-		output.value = -1 * current_rank[i];
+		output.value = -(long) current_rank[i];
 		inverse_buffer[bucket_starts[output.value / working_chunk_size]++] = output;
 	}
 
@@ -70,7 +70,7 @@ int main(int argc, char ** args) {
 	total_chunks = atoi(args[3]);
 	long working_chunk_size = parse_chunk_size(args[4]);
 
-	long * current_rank = (long *) Calloc((size_t)working_chunk_size * sizeof(long));
+	int32_t * current_rank = (int32_t *) Calloc((size_t)working_chunk_size * sizeof(int32_t));
 	InverseRecord * inverse_buffer = (InverseRecord *) Calloc((size_t)working_chunk_size * sizeof(InverseRecord));
 
 	printf("total chunks: %d\n", total_chunks);
