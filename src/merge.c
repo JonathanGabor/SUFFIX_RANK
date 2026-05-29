@@ -302,16 +302,9 @@ int refill_buffer (Manager * manager, int chunk_id) {
 }
 
 void flush_output_buffers (Manager *manager, int chunk_id) {
-	char file_name [MAX_PATH_LENGTH];
-	FILE * outputFP;
-
-	snprintf(file_name, sizeof(file_name), "%s/global_%d", manager->output_dir,chunk_id);
-
-	OpenBinaryFileAppend (&(outputFP), file_name);
-	Fwrite (manager->output_buffers[chunk_id], sizeof (long), manager->output_buffer_positions[chunk_id], outputFP);
-
-	fclose (outputFP);
-	outputFP = NULL;
+	//write to the persistent per-chunk file pointer; writes are sequential so
+	//no reopen/fseek is needed between flushes.
+	Fwrite (manager->output_buffers[chunk_id], sizeof (long), manager->output_buffer_positions[chunk_id], manager->output_fps[chunk_id]);
 }
 
 void clean_up(Manager * manager){
@@ -331,6 +324,9 @@ void clean_up(Manager * manager){
 		free(manager->output_buffers [i]);
 	free(manager->output_buffers);
 	free(manager->output_buffer_positions);
+	for (i=0; i<manager->total_chunks;i++)
+		if (manager->output_fps[i]) fclose(manager->output_fps[i]);
+	free(manager->output_fps);
 	free(manager->heap);
 }
 
@@ -369,6 +365,15 @@ void setup(Manager * manager){
 		manager->output_buffers [i] = (long *) Calloc ((size_t)manager->output_buffer_capacity *sizeof(OutputElement));
 
 	manager->output_buffer_positions  = (int *) Calloc (manager->total_chunks * sizeof(int));
+
+	//open one persistent file pointer per chunk for sequential output writes;
+	//global_* files start empty each merge invocation (tmp is cleared upstream).
+	manager->output_fps = (FILE **) Calloc (manager->total_chunks * sizeof(FILE *));
+	for (i=0; i<manager->total_chunks;i++) {
+		char file_name[MAX_PATH_LENGTH];
+		snprintf(file_name, sizeof(file_name), "%s/global_%d", manager->output_dir, i);
+		OpenBinaryFileWrite(&(manager->output_fps[i]), file_name);
+	}
 
 	//allocate heap
 	manager->heap = (HeapElement *) Calloc (manager->total_chunks * sizeof (HeapElement));

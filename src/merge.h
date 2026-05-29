@@ -38,6 +38,7 @@ typedef struct merge_manager {
 	long** output_buffers;             //buffers to store output elements - in this case updated ranks - for each chunk until they are flushed to disk
 	int *output_buffer_positions;              //where to add next element in each output buffer
 	int output_buffer_capacity;             //how many elements max each output buffer can hold
+	FILE **output_fps;                 //one persistent output file pointer per chunk; writes are sequential so we never reopen on each flush
 
 	int current_heap_size;
 	int total_chunks;
