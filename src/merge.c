@@ -52,7 +52,9 @@ int merge_runs (Manager * manager){
 
 		if (output_result.chunk_id >= 0) {          //app-specific
 			chunk_id = output_result.chunk_id;
-			i40_store(&manager->output_buffers[chunk_id][manager->output_buffer_positions[chunk_id]], output_result.new_rank);
+			GlobalRecord *gr = &manager->output_buffers[chunk_id][manager->output_buffer_positions[chunk_id]];
+			i40_store(&gr->rank, output_result.new_rank);
+			i40_store(&gr->count, output_result.count);
 			manager->output_buffer_positions[chunk_id]++;
 
 			//staying on the last slot of the output buffer - next will cause overflow
@@ -66,7 +68,9 @@ int merge_runs (Manager * manager){
 			heap_to_output_last (manager, &smallest,  &output_result);
 
 			chunk_id = output_result.chunk_id;
-      i40_store(&manager->output_buffers[chunk_id][manager->output_buffer_positions[chunk_id]], output_result.new_rank);
+      GlobalRecord *gr = &manager->output_buffers[chunk_id][manager->output_buffer_positions[chunk_id]];
+      i40_store(&gr->rank, output_result.new_rank);
+      i40_store(&gr->count, output_result.count);
 			manager->output_buffer_positions[chunk_id]++;
 		}
 		manager->last_transferred = smallest;
@@ -233,6 +237,7 @@ void heap_to_output ( Manager *manager, HeapElement *current, OutputElement *res
 	}
 
 	result->chunk_id = manager->last_transferred.chunk_id;
+	result->count = manager->last_transferred.count;  //local run length of the group being resolved
 
 	//both current rank and next rank are the same - these just came from 2 different files
 	//in this case we first need to increment total count for this combination of current-next
@@ -271,6 +276,7 @@ void heap_to_output_last ( Manager *manager, HeapElement *current, OutputElement
 	else {
 		result->new_rank = manager->updated_rank;
 	}
+	result->count = current->count;
 	result->chunk_id = current->chunk_id;
 }
 
@@ -306,7 +312,7 @@ int refill_buffer (Manager * manager, int chunk_id) {
 void flush_output_buffers (Manager *manager, int chunk_id) {
 	//write to the persistent per-chunk file pointer; writes are sequential so
 	//no reopen/fseek is needed between flushes.
-	Fwrite (manager->output_buffers[chunk_id], sizeof (int40), manager->output_buffer_positions[chunk_id], manager->output_fps[chunk_id]);
+	Fwrite (manager->output_buffers[chunk_id], sizeof (GlobalRecord), manager->output_buffer_positions[chunk_id], manager->output_fps[chunk_id]);
 }
 
 void clean_up(Manager * manager){
@@ -359,12 +365,12 @@ void setup(Manager * manager){
 	manager->input_buffer_positions  = (int *) Calloc (manager->total_chunks * sizeof(int));
 	manager->input_buffer_lengths  = (int *) Calloc (manager->total_chunks * sizeof(int));
 
-	//allocate output buffers - one per chunk; each stores int40 ranks on disk
-	manager->output_buffer_capacity =  mem_budget / (sizeof(int40)*(manager->total_chunks));
+	//allocate output buffers - one per chunk; each stores (rank, count) records on disk
+	manager->output_buffer_capacity =  mem_budget / (sizeof(GlobalRecord)*(manager->total_chunks));
 	if (manager->output_buffer_capacity < 1) manager->output_buffer_capacity = 1;
-	manager->output_buffers = (int40 **) Calloc (manager->total_chunks * sizeof (int40*));
+	manager->output_buffers = (GlobalRecord **) Calloc (manager->total_chunks * sizeof (GlobalRecord*));
 	for (i=0; i<manager->total_chunks;i++)
-		manager->output_buffers [i] = (int40 *) Calloc ((size_t)manager->output_buffer_capacity *sizeof(int40));
+		manager->output_buffers [i] = (GlobalRecord *) Calloc ((size_t)manager->output_buffer_capacity *sizeof(GlobalRecord));
 
 	manager->output_buffer_positions  = (int *) Calloc (manager->total_chunks * sizeof(int));
 

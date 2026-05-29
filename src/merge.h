@@ -18,6 +18,7 @@ typedef struct heap_element {
 
 typedef struct output_element {
 	int64_t new_rank;   //transient resolved rank; stored to disk as int40 via the output buffer
+	int count;          //local run length of the resolved group (carried to update)
 	int chunk_id;
 } OutputElement;
 
@@ -35,7 +36,7 @@ typedef struct merge_manager {
 	int input_buffer_capacity; //how many elements max can each hold
 	int *input_buffer_lengths;  //number of actual elements currently in input buffer - can be less than max capacity
 
-	int40** output_buffers;            //buffers to store output elements - in this case updated ranks - for each chunk until they are flushed to disk
+	GlobalRecord** output_buffers;     //per-chunk buffers of (resolved rank, local count) records, flushed to global_<chunk>
 	int *output_buffer_positions;              //where to add next element in each output buffer
 	int output_buffer_capacity;             //how many elements max each output buffer can hold
 	FILE **output_fps;                 //one persistent output file pointer per chunk; writes are sequential so we never reopen on each flush

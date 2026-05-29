@@ -14,6 +14,15 @@ typedef struct run_triple {
 	int count;
 } RunRecord;
 
+// One per chunk-local run, written by merge to global_<chunk> in run order
+// (1:1 with refine's runs_<chunk>). Carries the resolved global rank plus the
+// run's local count, so update can apply ranks by walking the local SA
+// count-by-count without re-reading next-ranks. count fits int40 (<= chunk_size).
+typedef struct global_record {
+	int40 rank;
+	int40 count;
+} GlobalRecord;
+
 typedef struct rank_pos_pair {
 	long index;
 	long value;
@@ -27,7 +36,7 @@ int generate_local_runs (char * rank_dir, char * runs_dir, int total_chunks, int
 int resolve_global_ranks (char *temp_dir );
 int update_local_ranks (char * rank_dir, char * temp_dir, int total_chunks, int chunk_id, int h,
                         long working_chunk_size,
-                        int40 * buffer_current, int40 * buffer_next,
-                        int * sa_buffer, int40 * updated_ranks);
+                        int40 * buffer_current,
+                        int * sa_buffer, GlobalRecord * global_buf);
 
 #endif
