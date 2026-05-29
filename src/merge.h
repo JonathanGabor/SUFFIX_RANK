@@ -10,8 +10,8 @@
 #define MERGE_BUFFER_FACTOR 14L
 
 typedef struct heap_element {
-	long current_rank;
-	long next_rank;
+	int32_t current_rank;   //rank values fit in int32; see RunRecord in algorithm.h
+	int32_t next_rank;
 	int count;
 	int chunk_id;
 } HeapElement;

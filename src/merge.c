@@ -5,10 +5,12 @@ long compare_heap_elements (HeapElement *a, HeapElement *b) {
 	if (a->current_rank == b->current_rank ) {
 		if (a->next_rank == b->next_rank)
 			return a->chunk_id - b->chunk_id;
-		return ABSOLUTE(a->next_rank) - ABSOLUTE (b->next_rank);
+		//cast to long: int32 ranks span up to +/-2^31, so the difference of two
+		//absolute values can exceed INT_MAX and must be computed in long.
+		return (long) ABSOLUTE(a->next_rank) - (long) ABSOLUTE (b->next_rank);
 	}
 
-	return a->current_rank - b->current_rank;
+	return (long) a->current_rank - (long) b->current_rank;
 }
 
 //manager fields should be already initialized in the caller

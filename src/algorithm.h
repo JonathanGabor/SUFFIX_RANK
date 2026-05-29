@@ -3,9 +3,12 @@
 
 #include <stdint.h>
 
+// Rank values fit in int32 (total symbol count < 2^31 for supported inputs).
+// Storing ranks as int32 halves the on-disk runs_* footprint and the heap
+// element size that the merge stage streams through.
 typedef struct run_triple {
-	long currentRank;
-	long nextRank;
+	int32_t currentRank;
+	int32_t nextRank;
 	int count;
 } RunRecord;
 

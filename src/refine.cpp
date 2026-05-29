@@ -105,8 +105,8 @@ static int generate_local_runs_fast(char *rank_dir, char *runs_dir, int total_ch
 	int runs_capacity = (int) (working_chunk_size / 3);
 
 	RunRecord cur;
-	cur.currentRank = current_ranks_buffer[sa_buffer[0]];
-	cur.nextRank    = next_ranks_buffer[sa_buffer[0]];
+	cur.currentRank = (int32_t) current_ranks_buffer[sa_buffer[0]];
+	cur.nextRank    = (int32_t) next_ranks_buffer[sa_buffer[0]];
 	cur.count       = 1;
 
 	for (int i = 1; i < total_records; i++) {
@@ -116,8 +116,8 @@ static int generate_local_runs_fast(char *rank_dir, char *runs_dir, int total_ch
 			cur.count++;
 		} else {
 			emit_run(cur, runs_buffer, &out_count, runs_capacity, runsFP);
-			cur.currentRank = c;
-			cur.nextRank    = n;
+			cur.currentRank = (int32_t) c;
+			cur.nextRank    = (int32_t) n;
 			cur.count       = 1;
 		}
 	}
