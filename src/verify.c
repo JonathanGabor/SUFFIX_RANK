@@ -6,18 +6,26 @@
 // External-memory SA correctness checker.
 //
 // Phase A: stream input symbols + ranks_* in position order. For each position
-// p emit a VerifyRecord (rank, position, next_rank, char, sent_id), routed
-// into the destination rank-chunk file tmp/verify_<(-rank)/W>. Mirrors
-// create_pairs.c's partition-by-rank-bucket pattern.
+// p emit a compact VerifyRecord (local rank slot, position, next_rank,
+// first_key), routed into the destination rank-chunk file tmp/verify_<(-rank)/W>.
+// Mirrors create_pairs.c's partition-by-rank-bucket pattern.
 //
 // Phase B: per rank-chunk, counting-sort records into rank order using
-// slot = (-rank) - k*W. This simultaneously verifies that ranks_* forms a
-// permutation of [-N+1, 0]. Then cross-check sorted_recs[i].position equals
+// slot recorded in each temp record. This simultaneously verifies that ranks_*
+// forms a permutation of [-N+1, 0]. Then stream-check positions against
 // suffixarray_<k>[i] (SA inverts ISA), and adjacent-compare suffixes via
-// (char, next_rank) with sentinel tie-breaking on sent_id.
+// (first_key, next_rank).
 
 #define WRITE_BUF_RECORDS 1024
 #define READ_BATCH 4096
+#define SA_READ_BATCH 4096
+
+typedef struct verify_record {
+	long position;       // global position p
+	long next_rank;      // ranks_*[p+1], or LONG_MAX if p == N-1
+	uint32_t slot;       // local rank slot in the destination rank chunk
+	uint32_t first_key;  // sentinels first by file id, then real symbols
+} VerifyRecord;
 
 typedef struct {
 	VerifyRecord *buf;
@@ -47,11 +55,21 @@ static void pw_close(PartitionWriter *w) {
 	free(w->buf);
 }
 
+static uint32_t encode_first_key(const InputStream *stream, uint32_t char_val, int sent_id) {
+	if (char_val == 0) return (uint32_t) sent_id;
+	return (uint32_t) stream->n_files + char_val;
+}
+
 static int verify_partition(const char *input_dir, const char *ranks_dir,
                             const char *tmp_dir, int total_chunks,
                             long W) {
 	InputStream stream;
 	if (input_stream_open(&stream, input_dir) != SUCCESS) {
+		return FAILURE;
+	}
+	if (W > (long) UINT32_MAX) {
+		fprintf(stderr, "verify requires chunk_size <= UINT32_MAX for local rank slots\n");
+		input_stream_close(&stream);
 		return FAILURE;
 	}
 
@@ -109,19 +127,25 @@ static int verify_partition(const char *input_dir, const char *ranks_dir,
 			}
 
 			long target = (-cur_rank) / W;
+			long slot = (-cur_rank) - target * W;
 			if (target < 0 || target >= total_chunks) {
 				fprintf(stderr,
 				        "Rank %ld at position %ld maps to bucket %ld (out of [0, %d))\n",
 				        cur_rank, (long) chunk_id * W + i, target, total_chunks);
 				return FAILURE;
 			}
+			if (slot < 0 || slot > (long) UINT32_MAX) {
+				fprintf(stderr,
+				        "Rank %ld at position %ld maps to local slot %ld outside uint32 range\n",
+				        cur_rank, (long) chunk_id * W + i, slot);
+				return FAILURE;
+			}
 
 			VerifyRecord rec;
-			rec.rank = cur_rank;
 			rec.position = (long) chunk_id * W + i;
 			rec.next_rank = next_rank;
-			rec.char_val = cv;
-			rec.sent_id = sid;
+			rec.slot = (uint32_t) slot;
+			rec.first_key = encode_first_key(&stream, cv, sid);
 			pw_emit(&writers[target], &rec);
 		}
 	}
@@ -140,33 +164,63 @@ static int verify_partition(const char *input_dir, const char *ranks_dir,
 	return SUCCESS;
 }
 
-// Strict lex-less on the (char, next_rank) annotation, with sentinel handling
-// matching test_sa.c. Equal pairs count as violations (SA entries must be
-// strictly ordered).
-static int lex_less_strict(const VerifyRecord *p, const VerifyRecord *c) {
-	int p_sent = (p->char_val == 0);
-	int c_sent = (c->char_val == 0);
-	if (p_sent && c_sent) {
-		return p->sent_id < c->sent_id;
+static int bitset_get(const uint8_t *bits, long i) {
+	return (bits[(size_t) i >> 3] >> (i & 7)) & 1U;
+}
+
+static void bitset_set(uint8_t *bits, long i) {
+	bits[(size_t) i >> 3] |= (uint8_t) (1U << (i & 7));
+}
+
+static int file_record_count(FILE *fp, const char *path, long *count_out) {
+	if (fseeko(fp, 0, SEEK_END) != 0) {
+		fprintf(stderr, "Failed to seek %s\n", path);
+		return FAILURE;
 	}
-	if (p_sent) return 1;
-	if (c_sent) return 0;
-	if (p->char_val != c->char_val) return p->char_val < c->char_val;
+	off_t bytes = ftello(fp);
+	if (bytes < 0) {
+		fprintf(stderr, "Failed to tell %s\n", path);
+		return FAILURE;
+	}
+	if ((uintmax_t) bytes % sizeof(long) != 0) {
+		fprintf(stderr, "%s size is not a whole number of suffix array entries\n", path);
+		return FAILURE;
+	}
+	if ((uintmax_t) bytes / sizeof(long) > (uintmax_t) LONG_MAX) {
+		fprintf(stderr, "%s has too many suffix array entries for this platform\n", path);
+		return FAILURE;
+	}
+	*count_out = (long) ((uintmax_t) bytes / sizeof(long));
+	if (fseeko(fp, 0, SEEK_SET) != 0) {
+		fprintf(stderr, "Failed to rewind %s\n", path);
+		return FAILURE;
+	}
+	return SUCCESS;
+}
+
+// Strict lex-less on the encoded (first_key, next_rank) annotation. Equal
+// pairs count as violations because SA entries must be strictly ordered.
+static int lex_less_strict(uint32_t p_first_key, long p_next_rank,
+                           uint32_t c_first_key, long c_next_rank) {
+	if (p_first_key != c_first_key) return p_first_key < c_first_key;
 	// Tie on T[p]: lex-smaller iff next_rank is lex-smaller. Rank 0 is the
 	// lex-smallest in this codebase's sign convention, so lex_smaller(a,b)
 	// numerically is a > b.
-	return p->next_rank > c->next_rank;
+	return p_next_rank > c_next_rank;
 }
 
 static int verify_check(const char *sa_dir, const char *tmp_dir,
                         int total_chunks, long W) {
-	VerifyRecord *sorted_recs = (VerifyRecord *) Calloc((size_t) W * sizeof(VerifyRecord));
-	char *seen = (char *) Calloc((size_t) W);
+	long *positions = (long *) Calloc((size_t) W * sizeof(long));
+	long *next_ranks = (long *) Calloc((size_t) W * sizeof(long));
+	uint32_t *first_keys = (uint32_t *) Calloc((size_t) W * sizeof(uint32_t));
+	uint8_t *seen = (uint8_t *) Calloc(((size_t) W + 7U) / 8U);
 	VerifyRecord *read_buf = (VerifyRecord *) Calloc(READ_BATCH * sizeof(VerifyRecord));
-	long *sa_buf = (long *) Calloc((size_t) W * sizeof(long));
+	long *sa_read_buf = (long *) Calloc(SA_READ_BATCH * sizeof(long));
 
-	VerifyRecord carry;
-	memset(&carry, 0, sizeof carry);
+	long carry_position = 0;
+	long carry_next_rank = 0;
+	uint32_t carry_first_key = 0;
 	int have_carry = 0;
 	long total_verified = 0;
 
@@ -180,10 +234,20 @@ static int verify_check(const char *sa_dir, const char *tmp_dir,
 
 		FILE *saFP;
 		OpenBinaryFileRead(&saFP, sa_path);
-		long sa_count = (long) fread(sa_buf, sizeof(long), (size_t) W, saFP);
-		fclose(saFP);
+		long sa_count;
+		if (file_record_count(saFP, sa_path, &sa_count) != SUCCESS) {
+			fclose(saFP);
+			return FAILURE;
+		}
+		if (sa_count > W) {
+			fprintf(stderr,
+			        "suffixarray_%d has %ld entries, exceeding chunk size %ld\n",
+			        k, sa_count, W);
+			fclose(saFP);
+			return FAILURE;
+		}
 
-		memset(seen, 0, (size_t) sa_count);
+		memset(seen, 0, ((size_t) sa_count + 7U) / 8U);
 
 		FILE *tmpFP;
 		OpenBinaryFileRead(&tmpFP, tmp_path);
@@ -192,23 +256,26 @@ static int verify_check(const char *sa_dir, const char *tmp_dir,
 		while ((got = fread(read_buf, sizeof(VerifyRecord), READ_BATCH, tmpFP)) > 0) {
 			size_t j;
 			for (j = 0; j < got; j++) {
-				long slot = (-read_buf[j].rank) - (long) k * W;
+				long slot = (long) read_buf[j].slot;
 				if (slot < 0 || slot >= sa_count) {
 					fprintf(stderr,
-					        "verify_%d: rank %ld (position %ld) maps to slot %ld outside [0, %ld)\n",
-					        k, read_buf[j].rank, read_buf[j].position, slot, sa_count);
+					        "verify_%d: position %ld maps to slot %ld outside [0, %ld)\n",
+					        k, read_buf[j].position, slot, sa_count);
 					fclose(tmpFP);
+					fclose(saFP);
 					return FAILURE;
 				}
-				if (seen[slot]) {
+				if (bitset_get(seen, slot)) {
 					fprintf(stderr,
-					        "verify_%d: duplicate rank %ld at slot %ld\n",
-					        k, read_buf[j].rank, slot);
+					        "verify_%d: duplicate record for slot %ld\n", k, slot);
 					fclose(tmpFP);
+					fclose(saFP);
 					return FAILURE;
 				}
-				sorted_recs[slot] = read_buf[j];
-				seen[slot] = 1;
+				positions[slot] = read_buf[j].position;
+				next_ranks[slot] = read_buf[j].next_rank;
+				first_keys[slot] = read_buf[j].first_key;
+				bitset_set(seen, slot);
 				placed++;
 			}
 		}
@@ -218,49 +285,86 @@ static int verify_check(const char *sa_dir, const char *tmp_dir,
 			fprintf(stderr,
 			        "verify_%d: got %ld records but suffixarray_%d has %ld entries\n",
 			        k, placed, k, sa_count);
+			fclose(saFP);
 			return FAILURE;
 		}
 
-		long i;
-		for (i = 0; i < sa_count; i++) {
-			if (sorted_recs[i].position != sa_buf[i]) {
-				fprintf(stderr,
-				        "SA mismatch at rank %ld: ranks_* says position %ld, suffixarray_%d[%ld] = %ld\n",
-				        -((long) k * W + i), sorted_recs[i].position, k, i, sa_buf[i]);
-				return FAILURE;
-			}
-			const VerifyRecord *prev = NULL;
-			if (i > 0) prev = &sorted_recs[i - 1];
-			else if (have_carry) prev = &carry;
+		long i = 0;
+		size_t sa_got;
+		while ((sa_got = fread(sa_read_buf, sizeof(long), SA_READ_BATCH, saFP)) > 0) {
+			size_t j;
+			for (j = 0; j < sa_got; j++, i++) {
+				if (i >= sa_count) {
+					fprintf(stderr, "suffixarray_%d has more entries than expected\n", k);
+					fclose(saFP);
+					return FAILURE;
+				}
+				if (positions[i] != sa_read_buf[j]) {
+					fprintf(stderr,
+					        "SA mismatch at rank %ld: ranks_* says position %ld, suffixarray_%d[%ld] = %ld\n",
+					        -((long) k * W + i), positions[i], k, i, sa_read_buf[j]);
+					fclose(saFP);
+					return FAILURE;
+				}
 
-			if (prev != NULL && !lex_less_strict(prev, &sorted_recs[i])) {
-				fprintf(stderr,
-				        "TEST FAILED at rank %ld: suffix at pos %ld not lex-less than suffix at pos %ld\n"
-				        "  prev: char=%u sent_id=%d next_rank=%ld\n"
-				        "  curr: char=%u sent_id=%d next_rank=%ld\n",
-				        -((long) k * W + i),
-				        prev->position, sorted_recs[i].position,
-				        prev->char_val, prev->sent_id, prev->next_rank,
-				        sorted_recs[i].char_val, sorted_recs[i].sent_id, sorted_recs[i].next_rank);
-				return FAILURE;
+				int has_prev = 0;
+				long prev_position = 0;
+				long prev_next_rank = 0;
+				uint32_t prev_first_key = 0;
+				if (i > 0) {
+					has_prev = 1;
+					prev_position = positions[i - 1];
+					prev_next_rank = next_ranks[i - 1];
+					prev_first_key = first_keys[i - 1];
+				} else if (have_carry) {
+					has_prev = 1;
+					prev_position = carry_position;
+					prev_next_rank = carry_next_rank;
+					prev_first_key = carry_first_key;
+				}
+
+				if (has_prev &&
+				    !lex_less_strict(prev_first_key, prev_next_rank, first_keys[i], next_ranks[i])) {
+					fprintf(stderr,
+					        "TEST FAILED at rank %ld: suffix at pos %ld not lex-less than suffix at pos %ld\n"
+					        "  prev: first_key=%u next_rank=%ld\n"
+					        "  curr: first_key=%u next_rank=%ld\n",
+					        -((long) k * W + i),
+					        prev_position, positions[i],
+					        prev_first_key, prev_next_rank,
+					        first_keys[i], next_ranks[i]);
+					fclose(saFP);
+					return FAILURE;
+				}
+				total_verified++;
+				if (total_verified % 10000000 == 0)
+					printf("Verified %ld positions. Correct so far.\n", total_verified);
 			}
-			total_verified++;
-			if (total_verified % 10000000 == 0)
-				printf("Verified %ld positions. Correct so far.\n", total_verified);
+		}
+		fclose(saFP);
+		if (i != sa_count) {
+			fprintf(stderr,
+			        "suffixarray_%d: expected %ld entries but read %ld\n",
+			        k, sa_count, i);
+			return FAILURE;
 		}
 
 		if (sa_count > 0) {
-			carry = sorted_recs[sa_count - 1];
+			carry_position = positions[sa_count - 1];
+			carry_next_rank = next_ranks[sa_count - 1];
+			carry_first_key = first_keys[sa_count - 1];
 			have_carry = 1;
 		}
 	}
 
 	printf("Test passed. Verified %ld SA positions.\n", total_verified);
 
-	free(sorted_recs);
+	free(positions);
+	free(next_ranks);
+	free(first_keys);
 	free(seen);
 	free(read_buf);
-	free(sa_buf);
+	free(sa_read_buf);
 	return SUCCESS;
 }
 
