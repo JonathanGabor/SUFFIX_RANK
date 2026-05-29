@@ -10,14 +10,14 @@
 #define MERGE_BUFFER_FACTOR 14L
 
 typedef struct heap_element {
-	int32_t current_rank;   //rank values fit in int32; see RunRecord in algorithm.h
-	int32_t next_rank;
+	int64_t current_rank;   //ranks unpacked from int40 once on insert; int64 keeps the hot compare cheap
+	int64_t next_rank;
 	int count;
 	int chunk_id;
 } HeapElement;
 
 typedef struct output_element {
-	long new_rank;
+	int64_t new_rank;   //transient resolved rank; stored to disk as int40 via the output buffer
 	int chunk_id;
 } OutputElement;
 
@@ -35,7 +35,7 @@ typedef struct merge_manager {
 	int input_buffer_capacity; //how many elements max can each hold
 	int *input_buffer_lengths;  //number of actual elements currently in input buffer - can be less than max capacity
 
-	long** output_buffers;             //buffers to store output elements - in this case updated ranks - for each chunk until they are flushed to disk
+	int40** output_buffers;            //buffers to store output elements - in this case updated ranks - for each chunk until they are flushed to disk
 	int *output_buffer_positions;              //where to add next element in each output buffer
 	int output_buffer_capacity;             //how many elements max each output buffer can hold
 	FILE **output_fps;                 //one persistent output file pointer per chunk; writes are sequential so we never reopen on each flush

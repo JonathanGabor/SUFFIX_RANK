@@ -77,7 +77,7 @@ static int verify_partition(const char *input_dir, const char *ranks_dir,
 	int k;
 	for (k = 0; k < total_chunks; k++) pw_init(&writers[k], tmp_dir, k);
 
-	int32_t *R = (int32_t *) Calloc((size_t) W * sizeof(int32_t));
+	int40 *R = (int40 *) Calloc((size_t) W * sizeof(int40));
 	char ranks_path[MAX_PATH_LENGTH];
 	char peek_path[MAX_PATH_LENGTH];
 
@@ -86,16 +86,16 @@ static int verify_partition(const char *input_dir, const char *ranks_dir,
 		snprintf(ranks_path, sizeof ranks_path, "%s/ranks_%d", ranks_dir, chunk_id);
 		FILE *ranksFP;
 		OpenBinaryFileRead(&ranksFP, ranks_path);
-		long count = (long) fread(R, sizeof(int32_t), (size_t) W, ranksFP);
+		long count = (long) fread(R, sizeof(int40), (size_t) W, ranksFP);
 		fclose(ranksFP);
 
-		int32_t next_first;
+		int40 next_first;
 		int have_next_first = 0;
 		if (chunk_id + 1 < total_chunks) {
 			snprintf(peek_path, sizeof peek_path, "%s/ranks_%d", ranks_dir, chunk_id + 1);
 			FILE *peekFP;
 			OpenBinaryFileRead(&peekFP, peek_path);
-			if (fread(&next_first, sizeof(int32_t), 1, peekFP) != 1) {
+			if (fread(&next_first, sizeof(int40), 1, peekFP) != 1) {
 				fprintf(stderr, "Failed to peek %s for cross-chunk next_rank\n", peek_path);
 				fclose(peekFP);
 				return FAILURE;
@@ -116,12 +116,12 @@ static int verify_partition(const char *input_dir, const char *ranks_dir,
 				return FAILURE;
 			}
 
-			long cur_rank = R[i];
+			long cur_rank = i40_load(&R[i]);
 			long next_rank;
 			if (i + 1 < count) {
-				next_rank = R[i + 1];
+				next_rank = i40_load(&R[i + 1]);
 			} else if (have_next_first) {
-				next_rank = next_first;
+				next_rank = i40_load(&next_first);
 			} else {
 				next_rank = LONG_MAX;  // p == N-1: shorter suffix sorts first
 			}

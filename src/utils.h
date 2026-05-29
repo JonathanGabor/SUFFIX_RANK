@@ -35,6 +35,27 @@
 #define FAILURE 1
 #define EMPTY 2
 
+// 40-bit signed integer, stored as 5 little-endian bytes. Rank values are
+// narrowed to this on disk and in the large streaming/rank buffers: 8 bytes
+// (long) is wasteful, but 32 bits is too small for the 100s-of-GB inputs the
+// algorithm must remain viable for. 40 bits covers +/-2^39 (~5.5e11) ranks.
+// Hot in-memory comparisons unpack to int64 once, so the per-access cost stays
+// off the heap's inner loop.
+typedef struct { uint8_t b[5]; } int40;
+
+static inline int64_t i40_load(const int40 *p) {
+	uint32_t lo;
+	memcpy(&lo, p->b, 4);                 // low 32 bits (unaligned-safe)
+	int8_t hi = (int8_t) p->b[4];         // top 8 bits, sign-extended
+	return (int64_t) lo | ((int64_t) hi << 32);
+}
+
+static inline void i40_store(int40 *p, int64_t v) {
+	uint32_t lo = (uint32_t) v;
+	memcpy(p->b, &lo, 4);
+	p->b[4] = (uint8_t) ((uint64_t) v >> 32);
+}
+
 typedef struct tuple_count {
 	unsigned int key;
     long count;

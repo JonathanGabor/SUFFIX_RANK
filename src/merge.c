@@ -52,7 +52,7 @@ int merge_runs (Manager * manager){
 
 		if (output_result.chunk_id >= 0) {          //app-specific
 			chunk_id = output_result.chunk_id;
-			manager->output_buffers[chunk_id][manager->output_buffer_positions[chunk_id]]=output_result.new_rank;
+			i40_store(&manager->output_buffers[chunk_id][manager->output_buffer_positions[chunk_id]], output_result.new_rank);
 			manager->output_buffer_positions[chunk_id]++;
 
 			//staying on the last slot of the output buffer - next will cause overflow
@@ -66,7 +66,7 @@ int merge_runs (Manager * manager){
 			heap_to_output_last (manager, &smallest,  &output_result);
 
 			chunk_id = output_result.chunk_id;
-      manager->output_buffers[chunk_id][manager->output_buffer_positions[chunk_id]]=output_result.new_rank;
+      i40_store(&manager->output_buffers[chunk_id][manager->output_buffer_positions[chunk_id]], output_result.new_rank);
 			manager->output_buffer_positions[chunk_id]++;
 		}
 		manager->last_transferred = smallest;
@@ -124,8 +124,8 @@ void replace_top_heap_element (Manager * manager, int chunk_id, RunRecord *input
 	int child, parent;
 
 	item.chunk_id = chunk_id;
-	item.current_rank = input->currentRank;
-	item.next_rank = input->nextRank;
+	item.current_rank = i40_load(&input->currentRank);
+	item.next_rank = i40_load(&input->nextRank);
 	item.count = input->count;
 
 	parent = 0;
@@ -176,8 +176,8 @@ int insert_into_heap (Manager * manager, int chunk_id, RunRecord *input){
 	int child, parent;
 
 	new_heap_element.chunk_id = chunk_id;
-	new_heap_element.current_rank = input->currentRank;
-	new_heap_element.next_rank = input->nextRank;
+	new_heap_element.current_rank = i40_load(&input->currentRank);
+	new_heap_element.next_rank = i40_load(&input->nextRank);
 	new_heap_element.count = input->count;
 
 	if (manager->current_heap_size == manager->total_chunks) {
@@ -306,7 +306,7 @@ int refill_buffer (Manager * manager, int chunk_id) {
 void flush_output_buffers (Manager *manager, int chunk_id) {
 	//write to the persistent per-chunk file pointer; writes are sequential so
 	//no reopen/fseek is needed between flushes.
-	Fwrite (manager->output_buffers[chunk_id], sizeof (long), manager->output_buffer_positions[chunk_id], manager->output_fps[chunk_id]);
+	Fwrite (manager->output_buffers[chunk_id], sizeof (int40), manager->output_buffer_positions[chunk_id], manager->output_fps[chunk_id]);
 }
 
 void clean_up(Manager * manager){
@@ -359,12 +359,12 @@ void setup(Manager * manager){
 	manager->input_buffer_positions  = (int *) Calloc (manager->total_chunks * sizeof(int));
 	manager->input_buffer_lengths  = (int *) Calloc (manager->total_chunks * sizeof(int));
 
-	//allocate output buffers - multiple in this algorithm
-	manager->output_buffer_capacity =  mem_budget / (sizeof(OutputElement)*(manager->total_chunks));
+	//allocate output buffers - one per chunk; each stores int40 ranks on disk
+	manager->output_buffer_capacity =  mem_budget / (sizeof(int40)*(manager->total_chunks));
 	if (manager->output_buffer_capacity < 1) manager->output_buffer_capacity = 1;
-	manager->output_buffers = (long **) Calloc (manager->total_chunks * sizeof (long*));
+	manager->output_buffers = (int40 **) Calloc (manager->total_chunks * sizeof (int40*));
 	for (i=0; i<manager->total_chunks;i++)
-		manager->output_buffers [i] = (long *) Calloc ((size_t)manager->output_buffer_capacity *sizeof(OutputElement));
+		manager->output_buffers [i] = (int40 *) Calloc ((size_t)manager->output_buffer_capacity *sizeof(int40));
 
 	manager->output_buffer_positions  = (int *) Calloc (manager->total_chunks * sizeof(int));
 

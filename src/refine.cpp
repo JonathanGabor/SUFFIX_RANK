@@ -15,7 +15,8 @@ extern "C" {
 #include <cstdlib>
 
 
-static inline void emit_run(RunRecord rec, RunRecord *out_buf, int *out_count,
+static inline void emit_run(int64_t curr, int64_t next, int count,
+                            RunRecord *out_buf, int *out_count,
                             int capacity, FILE *runsFP) {
 	if (*out_count == capacity) {
 		Fwrite(out_buf, sizeof(RunRecord), (size_t) capacity, runsFP);
@@ -24,13 +25,16 @@ static inline void emit_run(RunRecord rec, RunRecord *out_buf, int *out_count,
 			fprintf(stderr, "refine: runs_buffer flushed mid-chunk (cap=%d)\n", capacity);
 		}
 	}
-	out_buf[(*out_count)++] = rec;
+	RunRecord *r = &out_buf[(*out_count)++];
+	i40_store(&r->currentRank, curr);
+	i40_store(&r->nextRank, next);
+	r->count = count;
 }
 
 static int generate_local_runs_fast(char *rank_dir, char *runs_dir, int total_chunks,
                                     int chunk_id, int h, long working_chunk_size,
-                                    int32_t *current_ranks_buffer,
-                                    int32_t *next_ranks_buffer,
+                                    int40 *current_ranks_buffer,
+                                    int40 *next_ranks_buffer,
                                     int *sa_buffer,
                                     RunRecord *runs_buffer) {
 	char runs_file_name[MAX_PATH_LENGTH];
@@ -64,30 +68,30 @@ static int generate_local_runs_fast(char *rank_dir, char *runs_dir, int total_ch
 		snprintf(next_ranks_file_name, sizeof next_ranks_file_name,
 		         "%s/ranks_%d", rank_dir, (int) (chunk_id + next_chunk_dist));
 		OpenBinaryFileRead(&nextFP, next_ranks_file_name);
-		fread(next_ranks_buffer, sizeof(int32_t), (size_t) working_chunk_size, nextFP);
+		fread(next_ranks_buffer, sizeof(int40), (size_t) working_chunk_size, nextFP);
 		fclose(nextFP);
 	} else {
 		snprintf(next_ranks_file_name, sizeof next_ranks_file_name,
 		         "%s/ranks_%d", rank_dir, chunk_id);
 		OpenBinaryFileRead(&nextFP, next_ranks_file_name);
-		long offset = (1L << h) * (long) sizeof(int32_t);
+		long offset = (1L << h) * (long) sizeof(int40);
 		if (fseek(nextFP, offset, SEEK_SET)) {
 			printf("Fseek failed trying to move to position %ld in ranks file\n", 1L << h);
 			exit(1);
 		}
-		long r = (long) fread(next_ranks_buffer, sizeof(int32_t),
+		long r = (long) fread(next_ranks_buffer, sizeof(int40),
 		                      (size_t) working_chunk_size, nextFP);
 		fclose(nextFP);
 		if (chunk_id + 1 < total_chunks) {
 			snprintf(next_ranks_file_name, sizeof next_ranks_file_name,
 			         "%s/ranks_%d", rank_dir, chunk_id + 1);
 			OpenBinaryFileRead(&nextFP, next_ranks_file_name);
-			fread(next_ranks_buffer + r, sizeof(int32_t), (size_t) (1L << h), nextFP);
+			fread(next_ranks_buffer + r, sizeof(int40), (size_t) (1L << h), nextFP);
 			fclose(nextFP);
 		}
 	}
 
-	fread(current_ranks_buffer, sizeof(int32_t), (size_t) working_chunk_size, currentFP);
+	fread(current_ranks_buffer, sizeof(int40), (size_t) working_chunk_size, currentFP);
 	fclose(currentFP);
 
 	int total_records = (int) fread(sa_buffer, sizeof(int),
@@ -104,24 +108,23 @@ static int generate_local_runs_fast(char *rank_dir, char *runs_dir, int total_ch
 	int out_count = 0;
 	int runs_capacity = (int) (working_chunk_size / 3);
 
-	RunRecord cur;
-	cur.currentRank = (int32_t) current_ranks_buffer[sa_buffer[0]];
-	cur.nextRank    = (int32_t) next_ranks_buffer[sa_buffer[0]];
-	cur.count       = 1;
+	int64_t cur_c = i40_load(&current_ranks_buffer[sa_buffer[0]]);
+	int64_t cur_n = i40_load(&next_ranks_buffer[sa_buffer[0]]);
+	int cur_count = 1;
 
 	for (int i = 1; i < total_records; i++) {
-		long c = current_ranks_buffer[sa_buffer[i]];
-		long n = next_ranks_buffer[sa_buffer[i]];
-		if (c == cur.currentRank && n == cur.nextRank) {
-			cur.count++;
+		int64_t c = i40_load(&current_ranks_buffer[sa_buffer[i]]);
+		int64_t n = i40_load(&next_ranks_buffer[sa_buffer[i]]);
+		if (c == cur_c && n == cur_n) {
+			cur_count++;
 		} else {
-			emit_run(cur, runs_buffer, &out_count, runs_capacity, runsFP);
-			cur.currentRank = (int32_t) c;
-			cur.nextRank    = (int32_t) n;
-			cur.count       = 1;
+			emit_run(cur_c, cur_n, cur_count, runs_buffer, &out_count, runs_capacity, runsFP);
+			cur_c = c;
+			cur_n = n;
+			cur_count = 1;
 		}
 	}
-	emit_run(cur, runs_buffer, &out_count, runs_capacity, runsFP);
+	emit_run(cur_c, cur_n, cur_count, runs_buffer, &out_count, runs_capacity, runsFP);
 
 	if (out_count > 0)
 		Fwrite(runs_buffer, sizeof(RunRecord), (size_t) out_count, runsFP);
@@ -141,8 +144,8 @@ int main(int argc, char **argv) {
 	int h = atoi(argv[4]);
 	long working_chunk_size = parse_chunk_size(argv[5]);
 
-	int32_t *current_ranks_buffer = (int32_t *) Calloc((size_t) working_chunk_size * sizeof(int32_t));
-	int32_t *next_ranks_buffer    = (int32_t *) Calloc((size_t) working_chunk_size * sizeof(int32_t));
+	int40 *current_ranks_buffer = (int40 *) Calloc((size_t) working_chunk_size * sizeof(int40));
+	int40 *next_ranks_buffer    = (int40 *) Calloc((size_t) working_chunk_size * sizeof(int40));
 	int  *sa_buffer            = (int *)  Calloc((size_t) working_chunk_size * sizeof(int));
 	RunRecord *runs_buffer     = (RunRecord *) Calloc((size_t) (working_chunk_size / 3) * sizeof(RunRecord));
 

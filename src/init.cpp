@@ -76,9 +76,9 @@ static void read_all(const char *path, uint8_t *buf, long n) {
 //   produced by pass 3.
 
 static int write_chunk_pass2(FILE *ranks_fp, FILE *xfp,
-                             int32_t *output_buffer, uint8_t *encoded_buffer,
+                             int40 *output_buffer, uint8_t *encoded_buffer,
                              int pos_in_buffer) {
-	Fwrite(output_buffer, sizeof(int32_t), (size_t) pos_in_buffer, ranks_fp);
+	Fwrite(output_buffer, sizeof(int40), (size_t) pos_in_buffer, ranks_fp);
 	Fwrite(encoded_buffer, sizeof(uint8_t), (size_t) pos_in_buffer, xfp);
 	return 0;
 }
@@ -157,7 +157,7 @@ static int run_passes_1_and_2(const char *input_directory,
 		// counts[] is intentionally NOT reset; no bucket-sort step needs it.
 	}
 
-	int32_t *output_buffer = (int32_t *) Calloc((size_t) working_chunk_size * sizeof(int32_t));
+	int40 *output_buffer = (int40 *) Calloc((size_t) working_chunk_size * sizeof(int40));
 	uint8_t *encoded_buffer = (uint8_t *) Calloc((size_t) working_chunk_size * sizeof(uint8_t));
 
 	int pos_in_buffer = 0;
@@ -176,7 +176,7 @@ static int run_passes_1_and_2(const char *input_directory,
 			for (size_t cursor = 0; cursor < r; cursor++) {
 				uint32_t v = read_buf[cursor];
 				uint32_t sym = v + 1;
-				output_buffer[pos_in_buffer] = (int32_t) ranks[sym];
+				i40_store(&output_buffer[pos_in_buffer], ranks[sym]);
 				encoded_buffer[pos_in_buffer] = (uint8_t) (n_files + v);
 				pos_in_buffer++;
 				if (pos_in_buffer == working_chunk_size) {
@@ -194,7 +194,7 @@ static int run_passes_1_and_2(const char *input_directory,
 		fclose(fp);
 
 		// Per-file sentinel.
-		output_buffer[pos_in_buffer] = (int32_t) current_sentinel--;
+		i40_store(&output_buffer[pos_in_buffer], current_sentinel--);
 		encoded_buffer[pos_in_buffer] = (uint8_t) j;
 		pos_in_buffer++;
 		if (pos_in_buffer == working_chunk_size) {

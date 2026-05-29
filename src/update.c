@@ -4,8 +4,8 @@
 
 int update_local_ranks (char * rank_dir, char * temp_dir, int total_chunks, int chunk_id, int h,
                         long working_chunk_size,
-                        int32_t * buffer_current, int32_t * buffer_next,
-                        int * sa_buffer, long * updated_ranks){
+                        int40 * buffer_current, int40 * buffer_next,
+                        int * sa_buffer, int40 * updated_ranks){
 	int size_order = 0;
 	while((working_chunk_size >> size_order) > 1) {size_order++;}
 	long next_chunk_dist = h > size_order ? 1L<<(h-size_order) : 0;
@@ -24,29 +24,29 @@ int update_local_ranks (char * rank_dir, char * temp_dir, int total_chunks, int 
 	// after previous iteration - with 2 file pointers
 	snprintf(file_name, sizeof file_name, "%s/ranks_%d", rank_dir, chunk_id);
 	OpenBinaryFileReadWrite (&current_FP, file_name);
-	//memset(buffer_current, 0, (size_t)working_chunk_size * sizeof(int32_t));
-	total_ranks = fread (buffer_current, sizeof(int32_t), working_chunk_size, current_FP);
+	//memset(buffer_current, 0, (size_t)working_chunk_size * sizeof(int40));
+	total_ranks = fread (buffer_current, sizeof(int40), working_chunk_size, current_FP);
 
 	//handle reading next_rank
 	if (next_chunk_dist) {
 		snprintf(file_name, sizeof file_name, "%s/ranks_%d", rank_dir, (int)(chunk_id+next_chunk_dist));
 		OpenBinaryFileRead (&next_FP, file_name);
-		fread (buffer_next, sizeof (int32_t), working_chunk_size, next_FP);
+		fread (buffer_next, sizeof (int40), working_chunk_size, next_FP);
 	} else{
 		snprintf(file_name, sizeof file_name, "%s/ranks_%d", rank_dir, chunk_id);
 		OpenBinaryFileRead (&next_FP, file_name);
-		long offset = (1L << h) * (long)sizeof(int32_t);
+		long offset = (1L << h) * (long)sizeof(int40);
 		if(fseek(next_FP, offset, SEEK_SET)) {
 			printf ("Fseek failed trying to move to position %ld in ranks file\n", 1L << h);
 			exit (1);
 		}
-		long r = (long) fread (buffer_next, sizeof (int32_t), working_chunk_size, next_FP);
+		long r = (long) fread (buffer_next, sizeof (int40), working_chunk_size, next_FP);
 		// fclose(next_FP);
 		if (chunk_id+1 < total_chunks) {
 			fclose(next_FP);
 			snprintf(file_name, sizeof file_name, "%s/ranks_%d", rank_dir, chunk_id+1);
 			OpenBinaryFileRead (&next_FP, file_name);
-			fread (buffer_next + r, sizeof (int32_t), (size_t)(1L<<h), next_FP);
+			fread (buffer_next + r, sizeof (int40), (size_t)(1L<<h), next_FP);
 		}
 	}
 
@@ -63,7 +63,7 @@ int update_local_ranks (char * rank_dir, char * temp_dir, int total_chunks, int 
 	OpenBinaryFileRead(&global_resolved_FP, file_name);
 	//read content of global resolved triples(curr, next, new) into buffer
 	fseek (global_resolved_FP, 0, SEEK_END);
-	total_resolved = ftell (global_resolved_FP)/sizeof(long);
+	total_resolved = ftell (global_resolved_FP)/sizeof(int40);
 	rewind(global_resolved_FP);
 	if (total_resolved == 0) {
 		fclose (current_FP);
@@ -74,7 +74,7 @@ int update_local_ranks (char * rank_dir, char * temp_dir, int total_chunks, int 
 
 	//read all global updates for this chunk
 	// (sorted by curr,next rank) into an array updated_ranks
-	result = fread (updated_ranks, sizeof (long), total_resolved, global_resolved_FP);
+	result = fread (updated_ranks, sizeof (int40), total_resolved, global_resolved_FP);
 	if (result != total_resolved) {
 		printf ("Error reading global resolved ranks file %s: wanted to read %d but fread returned %d\n", file_name, total_resolved,result);
 		return FAILURE;
@@ -90,12 +90,13 @@ int update_local_ranks (char * rank_dir, char * temp_dir, int total_chunks, int 
 	int displacement = 0;
 	while (q < total_resolved) {
 		pos = sa_buffer [m];
-		curr = buffer_current[pos];
-		next = buffer_next[pos];
-		while (m < sa_length && curr == buffer_current[pos] && next == buffer_next[pos])
+		curr = i40_load(&buffer_current[pos]);
+		next = i40_load(&buffer_next[pos]);
+		long ur = i40_load(&updated_ranks[q]);   //resolved rank, constant across this run
+		while (m < sa_length && curr == i40_load(&buffer_current[pos]) && next == i40_load(&buffer_next[pos]))
 		{
-			buffer_current[pos] = (int32_t) updated_ranks[q];
-			if (updated_ranks[q] <= 0) {
+			i40_store(&buffer_current[pos], ur);
+			if (ur <= 0) {
 				displacement++;
 			}
 			else if (displacement) {
@@ -111,7 +112,7 @@ int update_local_ranks (char * rank_dir, char * temp_dir, int total_chunks, int 
 
 	//return pointer to the beginning of the chunk
 	rewind(current_FP);
-	Fwrite (buffer_current, sizeof(int32_t), total_ranks, current_FP);
+	Fwrite (buffer_current, sizeof(int40), total_ranks, current_FP);
 
 	snprintf(file_name, sizeof file_name, "%s/sa_%d", rank_dir, chunk_id);
 	OpenBinaryFileWrite (&saFP, file_name);
@@ -141,10 +142,10 @@ int main (int argc, char **argv){
 	long working_chunk_size = parse_chunk_size(argv[5]);
 
 	//allocate input buffers for current and next ranks, and for local suffix array
-	int32_t * buffer_current = (int32_t *) Calloc ((size_t)working_chunk_size * sizeof(int32_t));
-	int32_t * buffer_next = (int32_t *) Calloc ((size_t)working_chunk_size * sizeof(int32_t));
+	int40 * buffer_current = (int40 *) Calloc ((size_t)working_chunk_size * sizeof(int40));
+	int40 * buffer_next = (int40 *) Calloc ((size_t)working_chunk_size * sizeof(int40));
 	int * sa_buffer = (int *) Calloc ((size_t)working_chunk_size * sizeof(int));
-	long * updated_ranks = (long *) Calloc ((size_t)working_chunk_size * sizeof(long));
+	int40 * updated_ranks = (int40 *) Calloc ((size_t)working_chunk_size * sizeof(int40));
 
 	int more_runs = EMPTY;
     for (chunk_id=0; chunk_id<total_chunks; chunk_id++) {
