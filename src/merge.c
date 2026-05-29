@@ -27,8 +27,7 @@ int merge_runs (Manager * manager){
 	manager->last_transferred.chunk_id = -1;
 
 	while (manager->current_heap_size > 0) {     //heap is not empty
-		if(get_top_heap_element (manager, &smallest)!=SUCCESS)
-			return FAILURE;
+		smallest = manager->heap[0];             //peek the current minimum
 		if(manager->last_transferred.chunk_id == -1){
 	    manager->updated_rank = smallest.current_rank;
 	    manager->pair_count =0;
@@ -39,10 +38,13 @@ int merge_runs (Manager * manager){
 		if (result==FAILURE)
 			return FAILURE;
 
-		if(result==SUCCESS) {        //next element exists
-			if(insert_into_heap (manager,smallest.chunk_id, &next)!=SUCCESS)
-				return FAILURE;
-		}
+		//Fuse the pop+push into a single sift-down: if the popped chunk has a
+		//next record, replace the root with it and sift down once; otherwise
+		//pop the root (shrink heap) and sift the former-last element down.
+		if(result==SUCCESS)        //next element exists
+			replace_top_heap_element (manager, smallest.chunk_id, &next);
+		else
+			pop_top_heap_element (manager);
 
 		heap_to_output (manager, &smallest, &output_result);
 
@@ -112,28 +114,24 @@ int init_merge (Manager * manager) {
 	return SUCCESS;
 }
 
-int get_top_heap_element (Manager * manager, HeapElement * result){
+//Replace the root with a new record (from any chunk) and sift it down.
+//Heap size is unchanged. Used on the hot path: after the minimum is consumed
+//we feed in the next record from the same chunk, avoiding a separate pop+push.
+void replace_top_heap_element (Manager * manager, int chunk_id, RunRecord *input){
 	HeapElement item;
 	int child, parent;
 
-	if(manager->current_heap_size == 0){
-		printf( "UNEXPECTED ERROR: popping top element from an empty heap\n");
-		return FAILURE;
-	}
+	item.chunk_id = chunk_id;
+	item.current_rank = input->currentRank;
+	item.next_rank = input->nextRank;
+	item.count = input->count;
 
-	*result=manager->heap[0];  //to be returned
-
-	//now we need to reorganize heap - keep the smallest on top
-	item = manager->heap [--manager->current_heap_size]; // to be reinserted
-
-	parent =0;
+	parent = 0;
 	while ((child = (2 * parent) + 1) < manager->current_heap_size) {
-		// if there are two children, compare them
 		if (child + 1 < manager->current_heap_size &&
 				(compare_heap_elements(&(manager->heap[child]),&(manager->heap[child + 1]))>0))
 			++child;
 
-		// compare item with the larger
 		if (compare_heap_elements(&item, &(manager->heap[child]))>0) {
 			manager->heap[parent] = manager->heap[child];
 			parent = child;
@@ -142,8 +140,32 @@ int get_top_heap_element (Manager * manager, HeapElement * result){
 			break;
 	}
 	manager->heap[parent] = item;
+}
 
-	return SUCCESS;
+//Pop the root (shrink the heap by one) and sift the former-last element down.
+//Used when the chunk whose record was just consumed has no more records.
+void pop_top_heap_element (Manager * manager){
+	HeapElement item;
+	int child, parent;
+
+	item = manager->heap [--manager->current_heap_size];
+	if (manager->current_heap_size == 0)
+		return;
+
+	parent = 0;
+	while ((child = (2 * parent) + 1) < manager->current_heap_size) {
+		if (child + 1 < manager->current_heap_size &&
+				(compare_heap_elements(&(manager->heap[child]),&(manager->heap[child + 1]))>0))
+			++child;
+
+		if (compare_heap_elements(&item, &(manager->heap[child]))>0) {
+			manager->heap[parent] = manager->heap[child];
+			parent = child;
+		}
+		else
+			break;
+	}
+	manager->heap[parent] = item;
 }
 
 int insert_into_heap (Manager * manager, int chunk_id, RunRecord *input){

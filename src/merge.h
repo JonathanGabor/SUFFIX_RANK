@@ -55,7 +55,8 @@ void heap_to_output_last ( Manager *manager, HeapElement *current, OutputElement
 void heap_to_output ( Manager *manager, HeapElement *current, OutputElement *result);
 int get_next_input_element (Manager * manager, int chunk_id, RunRecord *result);
 int insert_into_heap (Manager * manager, int chunk_id, RunRecord *input);
-int get_top_heap_element (Manager * manager, HeapElement * result);
+void replace_top_heap_element (Manager * manager, int chunk_id, RunRecord *input);
+void pop_top_heap_element (Manager * manager);
 int init_merge (Manager * manager);
 int merge_runs (Manager * manager);
 long compare_heap_elements (HeapElement *a, HeapElement *b);
