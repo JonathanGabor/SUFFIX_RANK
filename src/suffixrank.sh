@@ -39,7 +39,7 @@ set -- "${POSITIONAL[@]}"
 if [[ -z "$1" ]] || [[ ! -d "$1" ]]
 then
     echo "Usage: $0 INPUT_FOLDER [CHUNK_SIZE] [--verify]"
-    echo "  CHUNK_SIZE:  positive power of 2 (default 16777216)"
+    echo "  CHUNK_SIZE:  positive power of 2 (default 1048576)"
     echo "  --verify:    run external-memory correctness checker after pipeline"
     exit 1
 fi
@@ -48,7 +48,7 @@ INPUT_DIR=$(cd "$1" && pwd)
 
 cd "$(dirname "$0")"
 
-CHUNK_SIZE="${2:-16777216}"
+CHUNK_SIZE="${2:-1048576}"
 if ! [[ "$CHUNK_SIZE" =~ ^[0-9]+$ ]] || (( CHUNK_SIZE <= 0 )); then
     echo "Invalid chunk size '$CHUNK_SIZE': must be a positive integer"
     exit 1
