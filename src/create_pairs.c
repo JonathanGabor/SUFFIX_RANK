@@ -6,7 +6,6 @@
 void create_pairs(char * ranks_dir, char * output_dir, int chunk_id, int total_chunks,
                   long working_chunk_size, int40 * current_rank, InverseRecord * inverse_buffer) {
 	int i;
-	InverseRecord output;
 
 	char ranks_file_name[MAX_PATH_LENGTH];
 	char output_file_name[MAX_PATH_LENGTH];
@@ -35,9 +34,11 @@ void create_pairs(char * ranks_dir, char * output_dir, int chunk_id, int total_c
 	}
 
 	for (i=0; i < num_elements; i++) {
-		output.index = (long)i + (long)chunk_id * working_chunk_size;
-		output.value = -i40_load(&current_rank[i]);
-		inverse_buffer[bucket_starts[output.value / working_chunk_size]++] = output;
+		long val = -i40_load(&current_rank[i]);
+		long idx = (long)i + (long)chunk_id * working_chunk_size;
+		InverseRecord *dst = &inverse_buffer[bucket_starts[val / working_chunk_size]++];
+		i40_store(&dst->index, idx);
+		i40_store(&dst->value, val);
 	}
 
 	snprintf(output_file_name, sizeof output_file_name, "%s/pairs_0", output_dir);

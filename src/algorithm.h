@@ -23,9 +23,13 @@ typedef struct global_record {
 	int40 count;
 } GlobalRecord;
 
+// (position, final-rank) pair routed by rank bucket in create_pairs and
+// consumed by invert. Both fields are < 2^39 (positions/ranks of a single
+// string), so int40 halves the intermediate pairs_* footprint. The final
+// suffixarray_* output stays `long`.
 typedef struct rank_pos_pair {
-	long index;
-	long value;
+	int40 index;
+	int40 value;
 } InverseRecord;
 
 int generate_local_runs (char * rank_dir, char * runs_dir, int total_chunks, int chunk_id, int h,

@@ -19,7 +19,7 @@ void invert(char * pairs_dir, char * output_dir, int chunk_id, long working_chun
 
 	int i;
 	for (i=0; i < total_records; i++) {
-		suffixarray[pairs_buffer[i].value % working_chunk_size] = pairs_buffer[i].index;
+		suffixarray[i40_load(&pairs_buffer[i].value) % working_chunk_size] = i40_load(&pairs_buffer[i].index);
 	}
 
 	OpenBinaryFileWrite(&outputFP, output_file_name);
