@@ -1,7 +1,7 @@
 # SUFFIX RANK
 ## Suffix sorting for large inputs
 
-SUFFIX_RANK is an out-of-core suffix array construction implementation. The default pipeline uses a libdivsufsort-based initial partial suffix sort inspired by SAscan, followed by prefix-doubling rank refinement across chunks.
+SUFFIX_RANK is an out-of-core suffix array construction implementation. The pipeline uses a libdivsufsort-based initial partial suffix sort inspired by SAscan, followed by prefix-doubling rank refinement across chunks.
 
 ### To Run
 ```
@@ -14,7 +14,9 @@ CHUNK_SIZE:  positive power of 2 (default 16777216).
 
 --verify: verify the correctness of the suffix array after creation
 
-The divsufsort path currently works on byte alphabets only.
+**Note:** For inputs much larger than CHUNK_SIZE, you may need to run `ulimit -n 1024` (or higher) to increase the open-file descriptor limit.
+
+Currently works on byte alphabets only.
 
 ### Dependency
 
