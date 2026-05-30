@@ -1,6 +1,11 @@
 #include "utils.h"
 #include <errno.h>
 
+static void report_open_failure(const char *description, const char *file_name) {
+	fprintf(stderr, "Could not open %s \"%s\": %s\n",
+			description, file_name, strerror(errno));
+}
+
 void * Calloc (size_t num_bytes) {
 	void * result =  calloc (num_bytes, 1);
 	if (result == NULL) {
@@ -28,22 +33,21 @@ long parse_chunk_size (const char *arg) {
 
 void OpenBinaryFileRead (FILE ** fp, char * file_name) {
 	if(!(*fp= fopen ( file_name, "rb" )))  {
-		perror("Error:");
-		printf("Could not open input binary file \"%s\" for reading \n", file_name);
+		report_open_failure("input binary file for reading", file_name);
 		exit (1);
 	}
 }
 
 void OpenBinaryFileReadWrite (FILE ** fp, char * file_name) {
 	if(!(*fp= fopen ( file_name, "r+b" ))) {
-		printf("Could not open input binary file \"%s\" for reading and writing \n", file_name);
+		report_open_failure("input binary file for reading and writing", file_name);
 		exit (1);
 	}
 }
 
 void OpenBinaryFileWrite (FILE ** fp, char * file_name) {
 	if(!(*fp= fopen ( file_name, "wb" )))  {
-		printf("Could not open output binary file \"%s\" for writing \n", file_name);
+		report_open_failure("output binary file for writing", file_name);
 		exit (1);
 	}
 }
@@ -51,8 +55,7 @@ void OpenBinaryFileWrite (FILE ** fp, char * file_name) {
 
 void OpenBinaryFileAppend (FILE **fp, char * file_name) {
 	if(!(*fp= fopen ( file_name, "ab" )))  {
-		printf("%s\n", strerror(errno));
-		printf("Could not open binary file \"%s\" for appending \n", file_name);
+		report_open_failure("binary file for appending", file_name);
 		exit (1);
 	}
 }
@@ -67,14 +70,14 @@ void Fwrite (const void *buffer, size_t elem_size, size_t num_elements, FILE *fp
 
 void OpenFileWrite (FILE ** fp, char * file_name) {
 	if(!(*fp= fopen ( file_name, "w" )))   {
-		printf("Could not open file \"%s\" for writing \n", file_name);
+		report_open_failure("file for writing", file_name);
 		exit (1);
 	}
 }
 
 void OpenFileRead (FILE ** fp, char * file_name) {
 	if(!(*fp= fopen ( file_name, "r" )))   {
-		printf("Could not open file \"%s\" for reading \n", file_name);
+		report_open_failure("file for reading", file_name);
 		exit (1);
 	}
 }

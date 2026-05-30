@@ -81,6 +81,18 @@ fi
 
 CHUNKS=$(ls -1 "${RANK_DIR}"/sa_* 2>/dev/null | wc -l | tr -d ' ')
 
+# merge currently keeps one input and one output FILE open per chunk.
+OPEN_FILE_LIMIT=$(ulimit -n)
+if [[ "$OPEN_FILE_LIMIT" != "unlimited" ]]; then
+    REQUIRED_OPEN_FILES=$(( 2 * CHUNKS + 16 ))
+    if (( OPEN_FILE_LIMIT < REQUIRED_OPEN_FILES )); then
+        echo "Error: current open-file limit is too low for ${CHUNKS} chunks."
+        echo "merge needs at least ${REQUIRED_OPEN_FILES} file descriptors, but ulimit -n is ${OPEN_FILE_LIMIT}."
+        echo "Increase the limit, for example: ulimit -n ${REQUIRED_OPEN_FILES}"
+        exit 1
+    fi
+fi
+
 DUR=$(echo "$($DATE) - $START" | bc)
 printf "Finished initializing in %.4f, total %d chunks\n" $DUR $CHUNKS
 
