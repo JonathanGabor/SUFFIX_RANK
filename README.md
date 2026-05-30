@@ -9,7 +9,7 @@ cd src
 make
 ./suffixrank.sh INPUT_FOLDER [CHUNK_SIZE] [--verify]
 ```
-CHUNK_SIZE:  positive power of 2 (default 1048576).
+CHUNK_SIZE:  positive power of 2 (default 16777216).
   Note that the algorithm will use 28 times this amount of RAM in bytes (so by default, it will use ~31 MB).
 
 --verify: verify the correctness of the suffix array after creation

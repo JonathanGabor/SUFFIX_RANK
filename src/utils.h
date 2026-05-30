@@ -28,7 +28,7 @@
 // WORKING_CHUNK_SIZE is a runtime parameter passed via the CLI to each binary
 // that needs it (see suffixrank.sh). chunk_size must be a positive power of 2.
 // The public pipeline is byte-alphabet only.
-#define DEFAULT_WORKING_CHUNK_SIZE 1048576L
+#define DEFAULT_WORKING_CHUNK_SIZE 16777216L
 #define BYTE_ALPHABET_SIZE 256L
 
 #define SUCCESS 0
