@@ -7,20 +7,24 @@
 // Rank values are stored as int40 (5 bytes) on disk and in streaming buffers.
 // This shrinks the runs_* footprint vs 8-byte long while staying valid for the
 // large (100s-of-GB) inputs the algorithm must support, where int32 would
-// overflow. count is a chunk-local run length (<= chunk_size <= 2^30).
+// overflow. count is a chunk-local run length (<= chunk_size <= 2^30), stored
+// as int32p (4 bytes, alignment 1) so the struct packs to 14 bytes with no
+// padding (a plain `int` would force alignment-4 padding to 16 bytes).
 typedef struct run_triple {
 	int40 currentRank;
 	int40 nextRank;
-	int count;
+	int32p count;
 } RunRecord;
 
 // One per chunk-local run, written by merge to global_<chunk> in run order
 // (1:1 with refine's runs_<chunk>). Carries the resolved global rank plus the
 // run's local count, so update can apply ranks by walking the local SA
-// count-by-count without re-reading next-ranks. count fits int40 (<= chunk_size).
+// count-by-count without re-reading next-ranks. count is a chunk-local run
+// length (<= chunk_size <= 2^30), stored as int32p (4 bytes) so the struct is
+// 9 bytes rather than 10.
 typedef struct global_record {
 	int40 rank;
-	int40 count;
+	int32p count;
 } GlobalRecord;
 
 // (position, final-rank) pair routed by rank bucket in create_pairs and

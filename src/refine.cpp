@@ -28,7 +28,7 @@ static inline void emit_run(int64_t curr, int64_t next, int count,
 	RunRecord *r = &out_buf[(*out_count)++];
 	i40_store(&r->currentRank, curr);
 	i40_store(&r->nextRank, next);
-	r->count = count;
+	i32_store(&r->count, count);
 }
 
 static int generate_local_runs_fast(char *rank_dir, char *runs_dir, int total_chunks,

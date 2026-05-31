@@ -7,7 +7,7 @@
 // Derived memory budget for merge buffers. Scales with the runtime chunk size.
 // Each chunk gets working_chunk_size * MERGE_BUFFER_FACTOR bytes of input
 // buffer (and the same for output buffers), divided across all total_chunks.
-#define MERGE_BUFFER_FACTOR 14L
+#define MERGE_BUFFER_FACTOR 10L
 
 typedef struct heap_element {
 	int64_t current_rank;   //ranks unpacked from int40 once on insert; int64 keeps the hot compare cheap

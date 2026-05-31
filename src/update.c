@@ -55,7 +55,7 @@ int update_local_ranks (char * rank_dir, char * temp_dir, int total_chunks, int 
 	int displacement = 0;
 	for (q = 0; q < total_resolved; q++) {
 		long rank = i40_load(&global_buf[q].rank);
-		long cnt  = i40_load(&global_buf[q].count);
+		long cnt  = i32_load(&global_buf[q].count);
 		long j;
 		for (j = 0; j < cnt; j++) {
 			int pos = sa_buffer[m];

@@ -54,7 +54,7 @@ int merge_runs (Manager * manager){
 			chunk_id = output_result.chunk_id;
 			GlobalRecord *gr = &manager->output_buffers[chunk_id][manager->output_buffer_positions[chunk_id]];
 			i40_store(&gr->rank, output_result.new_rank);
-			i40_store(&gr->count, output_result.count);
+			i32_store(&gr->count, output_result.count);
 			manager->output_buffer_positions[chunk_id]++;
 
 			//staying on the last slot of the output buffer - next will cause overflow
@@ -70,7 +70,7 @@ int merge_runs (Manager * manager){
 			chunk_id = output_result.chunk_id;
       GlobalRecord *gr = &manager->output_buffers[chunk_id][manager->output_buffer_positions[chunk_id]];
       i40_store(&gr->rank, output_result.new_rank);
-      i40_store(&gr->count, output_result.count);
+      i32_store(&gr->count, output_result.count);
 			manager->output_buffer_positions[chunk_id]++;
 		}
 		manager->last_transferred = smallest;
@@ -130,7 +130,7 @@ void replace_top_heap_element (Manager * manager, int chunk_id, RunRecord *input
 	item.chunk_id = chunk_id;
 	item.current_rank = i40_load(&input->currentRank);
 	item.next_rank = i40_load(&input->nextRank);
-	item.count = input->count;
+	item.count = i32_load(&input->count);
 
 	parent = 0;
 	while ((child = (2 * parent) + 1) < manager->current_heap_size) {
@@ -182,7 +182,7 @@ int insert_into_heap (Manager * manager, int chunk_id, RunRecord *input){
 	new_heap_element.chunk_id = chunk_id;
 	new_heap_element.current_rank = i40_load(&input->currentRank);
 	new_heap_element.next_rank = i40_load(&input->nextRank);
-	new_heap_element.count = input->count;
+	new_heap_element.count = i32_load(&input->count);
 
 	if (manager->current_heap_size == manager->total_chunks) {
 		printf( "Unexpected ERROR: heap is full\n");
