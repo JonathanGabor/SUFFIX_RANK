@@ -24,23 +24,26 @@ CHUNKS=0
 
 TRUESTART=$($DATE)
 
-# Pull out --verify (may appear anywhere); remaining args stay positional.
+# Pull out --verify / --nocache (may appear anywhere); remaining args stay positional.
 RUN_VERIFY=0
 POSITIONAL=()
 for arg in "$@"; do
-    if [[ "$arg" == "--verify" ]]; then
-        RUN_VERIFY=1
-    else
-        POSITIONAL+=("$arg")
-    fi
+    case "$arg" in
+        --verify)  RUN_VERIFY=1 ;;
+        # Bypass the OS page cache for all file I/O, to simulate a memory-saturated
+        # large-input run (where scratch/input never gets cached) on an idle dev box.
+        --nocache) export SUFFIXRANK_NOCACHE=1 ;;
+        *)         POSITIONAL+=("$arg") ;;
+    esac
 done
 set -- "${POSITIONAL[@]}"
 
 if [[ -z "$1" ]] || [[ ! -d "$1" ]]
 then
-    echo "Usage: $0 INPUT_FOLDER [CHUNK_SIZE] [--verify]"
+    echo "Usage: $0 INPUT_FOLDER [CHUNK_SIZE] [--verify] [--nocache]"
     echo "  CHUNK_SIZE:  positive power of 2 (default 16777216)"
     echo "  --verify:    run external-memory correctness checker after pipeline"
+    echo "  --nocache:   bypass OS page cache for all I/O (simulate RAM-saturated run)"
     exit 1
 fi
 
@@ -59,6 +62,9 @@ if (( (CHUNK_SIZE & (CHUNK_SIZE - 1)) != 0 )); then
 fi
 
 echo "Using chunk size: $CHUNK_SIZE (byte alphabet, divsufsort path)"
+if [[ -n "${SUFFIXRANK_NOCACHE:-}" && "${SUFFIXRANK_NOCACHE}" != "0" ]]; then
+    echo "Page cache: BYPASSED (SUFFIXRANK_NOCACHE=${SUFFIXRANK_NOCACHE})"
+fi
 
 #prepare directory structure for processing
 for dir in "$RANK_DIR" "$OUTPUT_DIR" "$TEMP_DIR" "$CHUNKS_DIR"; do

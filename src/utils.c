@@ -1,9 +1,38 @@
 #include "utils.h"
 #include <errno.h>
+#include <fcntl.h>
 
 static void report_open_failure(const char *description, const char *file_name) {
 	fprintf(stderr, "Could not open %s \"%s\": %s\n",
 			description, file_name, strerror(errno));
+}
+
+// Benchmark knob: when SUFFIXRANK_NOCACHE is set to a non-zero value, every file
+// opened through these wrappers bypasses the OS page cache. This simulates the
+// target environment (100s-of-GB inputs where RAM is fully consumed by the
+// algorithm's working set, so scratch/input I/O never gets cached) on an
+// otherwise-idle dev machine that would happily cache the small benchmark files.
+// On macOS this uses F_NOCACHE; elsewhere it best-effort advises POSIX_FADV_DONTNEED.
+static int nocache_enabled(void) {
+	static int cached = -1;
+	if (cached < 0) {
+		const char *v = getenv("SUFFIXRANK_NOCACHE");
+		cached = (v && v[0] && strcmp(v, "0") != 0) ? 1 : 0;
+	}
+	return cached;
+}
+
+static void apply_nocache(FILE *fp) {
+	if (!fp || !nocache_enabled()) return;
+	int fd = fileno(fp);
+	if (fd < 0) return;
+#if defined(__APPLE__)
+	fcntl(fd, F_NOCACHE, 1);
+#elif defined(POSIX_FADV_DONTNEED)
+	posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
+#else
+	(void) fd;
+#endif
 }
 
 void * Calloc (size_t num_bytes) {
@@ -36,6 +65,7 @@ void OpenBinaryFileRead (FILE ** fp, char * file_name) {
 		report_open_failure("input binary file for reading", file_name);
 		exit (1);
 	}
+	apply_nocache(*fp);
 }
 
 void OpenBinaryFileReadWrite (FILE ** fp, char * file_name) {
@@ -43,6 +73,7 @@ void OpenBinaryFileReadWrite (FILE ** fp, char * file_name) {
 		report_open_failure("input binary file for reading and writing", file_name);
 		exit (1);
 	}
+	apply_nocache(*fp);
 }
 
 void OpenBinaryFileWrite (FILE ** fp, char * file_name) {
@@ -50,6 +81,7 @@ void OpenBinaryFileWrite (FILE ** fp, char * file_name) {
 		report_open_failure("output binary file for writing", file_name);
 		exit (1);
 	}
+	apply_nocache(*fp);
 }
 
 
@@ -58,6 +90,7 @@ void OpenBinaryFileAppend (FILE **fp, char * file_name) {
 		report_open_failure("binary file for appending", file_name);
 		exit (1);
 	}
+	apply_nocache(*fp);
 }
 
 void Fwrite (const void *buffer, size_t elem_size, size_t num_elements, FILE *fp ) {
@@ -73,6 +106,7 @@ void OpenFileWrite (FILE ** fp, char * file_name) {
 		report_open_failure("file for writing", file_name);
 		exit (1);
 	}
+	apply_nocache(*fp);
 }
 
 void OpenFileRead (FILE ** fp, char * file_name) {
@@ -80,6 +114,7 @@ void OpenFileRead (FILE ** fp, char * file_name) {
 		report_open_failure("file for reading", file_name);
 		exit (1);
 	}
+	apply_nocache(*fp);
 }
 
 //reference <citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.14.8162&rep=rep1&type=pdf> p1260
