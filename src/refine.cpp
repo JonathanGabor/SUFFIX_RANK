@@ -22,6 +22,7 @@ extern "C" {
 // previous bound).
 #define NUM_COUNT_BUCKETS 8
 static long g_count_hist[NUM_COUNT_BUCKETS];
+static long g_mid_chunk_flushes;
 
 static inline int count_bucket(int count) {
 	if (count <= 4) return count - 1;          // 1->0, 2->1, 3->2, 4->3
@@ -42,9 +43,7 @@ static inline void emit_run(int64_t curr, int64_t next, int count,
 	if (*out_count == capacity) {
 		Fwrite(out_buf, sizeof(RunRecord), (size_t) capacity, runsFP);
 		*out_count = 0;
-		if (TEST_PERFORMANCE) {
-			fprintf(stderr, "refine: runs_buffer flushed mid-chunk (cap=%d)\n", capacity);
-		}
+		if (TEST_PERFORMANCE) g_mid_chunk_flushes++;
 	}
 	RunRecord *r = &out_buf[(*out_count)++];
 	i40_store(&r->currentRank, curr);
@@ -187,6 +186,8 @@ int main(int argc, char **argv) {
 		for (int b = 0; b < NUM_COUNT_BUCKETS; b++) total += g_count_hist[b];
 		fprintf(stderr, "refine: run-length count distribution for prefix_len %ld (total %ld runs)\n",
 		        prefix_len, total);
+		fprintf(stderr, "refine: runs_buffer flushed mid-chunk %ld times\n",
+		        g_mid_chunk_flushes);
 		for (int b = 0; b < NUM_COUNT_BUCKETS; b++) {
 			double pct = total > 0 ? 100.0 * (double) g_count_hist[b] / (double) total : 0.0;
 			fprintf(stderr, "  count %-10s : %12ld  (%6.2f%%)\n",
