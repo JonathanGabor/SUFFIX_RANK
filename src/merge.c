@@ -1,5 +1,35 @@
 #include "merge.h"
 
+//Output GlobalRecords (9B) are overlaid onto the shared per-chunk input buffer
+//(RunRecords, 14B), written at the front over slots already copied into the heap.
+//int40/int32p are alignment-1 so the unaligned overlay is well defined.
+//
+//The output cursor must never overrun into input not yet read into the heap, i.e.
+//the write must satisfy (pos+1)*9 <= 14*input_position (whole buffer is free once
+//the run is exhausted, input_position == -1). Steady state keeps the cursors in
+//lockstep with the input read leading, but across a refill the reset output
+//cursor can momentarily carry up to two pending resolutions while only one new
+//input slot is free. We guard each write: if it would overrun, flush the
+//accumulated output first and restart the cursor (the just-freed front always
+//holds at least one record, so pos 0 is then safe). This self-corrects the
+//boundary; in steady state the guard never fires.
+static inline void write_output(Manager *manager, int chunk_id, int64_t rank, int count) {
+	int pos = manager->output_buffer_positions[chunk_id];
+	int p = manager->input_buffer_positions[chunk_id];
+	long avail = (p == -1) ? (long)manager->input_buffer_capacity * (long)sizeof(RunRecord)
+	                       : (long)p * (long)sizeof(RunRecord);
+	if ((long)(pos + 1) * (long)sizeof(GlobalRecord) > avail) {
+		flush_output_buffers(manager, chunk_id);
+		pos = 0;
+		manager->output_buffer_positions[chunk_id] = 0;
+	}
+	GlobalRecord *gr = (GlobalRecord *)((char *)manager->input_buffers[chunk_id]
+			+ (size_t)pos * sizeof(GlobalRecord));
+	i40_store(&gr->rank, rank);
+	i32_store(&gr->count, count);
+	manager->output_buffer_positions[chunk_id] = pos + 1;
+}
+
 //we are comparing 2 heap elements by current rank, then by next rank, if equal - by file_id
 long compare_heap_elements (HeapElement *a, HeapElement *b) {
 	if (a->current_rank == b->current_rank ) {
@@ -31,8 +61,8 @@ int merge_runs (Manager * manager){
 	while (manager->current_heap_size > 0) {     //heap is not empty
 		smallest = manager->heap[0];             //peek the current minimum
 		if(manager->last_transferred.chunk_id == -1){
-	    manager->updated_rank = smallest.current_rank;
-	    manager->pair_count =0;
+	    	manager->updated_rank = smallest.current_rank;
+	    	manager->pair_count =0;
 		}
 
 		result = get_next_input_element (manager, smallest.chunk_id, &next);
@@ -51,27 +81,13 @@ int merge_runs (Manager * manager){
 		heap_to_output (manager, &smallest, &output_result);
 
 		if (output_result.chunk_id >= 0) {          //app-specific
-			chunk_id = output_result.chunk_id;
-			GlobalRecord *gr = &manager->output_buffers[chunk_id][manager->output_buffer_positions[chunk_id]];
-			i40_store(&gr->rank, output_result.new_rank);
-			i32_store(&gr->count, output_result.count);
-			manager->output_buffer_positions[chunk_id]++;
-
-			//staying on the last slot of the output buffer - next will cause overflow
-			if(manager->output_buffer_positions[chunk_id] == manager->output_buffer_capacity ) {
-				flush_output_buffers(manager, chunk_id);
-				manager->output_buffer_positions[chunk_id]=0;
-			}
+			//overlay the resolved record onto the shared buffer (see write_output)
+			write_output(manager, output_result.chunk_id, output_result.new_rank, output_result.count);
 		}
 
 		if (manager->current_heap_size == 0) {         //last heap element
 			heap_to_output_last (manager, &smallest,  &output_result);
-
-			chunk_id = output_result.chunk_id;
-      GlobalRecord *gr = &manager->output_buffers[chunk_id][manager->output_buffer_positions[chunk_id]];
-      i40_store(&gr->rank, output_result.new_rank);
-      i32_store(&gr->count, output_result.count);
-			manager->output_buffer_positions[chunk_id]++;
+			write_output(manager, output_result.chunk_id, output_result.new_rank, output_result.count);
 		}
 		manager->last_transferred = smallest;
 	}
@@ -290,6 +306,15 @@ int refill_buffer (Manager * manager, int chunk_id) {
 		return EMPTY; //run is complete - no more elements in the input file
 	}
 
+	//the input buffer is shared with output: before fread overwrites it, flush the
+	//output records accumulated in the front (all input here is already consumed),
+	//then restart the output cursor. Any outputs lagging past this window boundary
+	//get written into the fresh buffer and flushed at the next refill/final flush.
+	if (manager->output_buffer_positions[chunk_id] > 0) {
+		flush_output_buffers(manager, chunk_id);
+		manager->output_buffer_positions[chunk_id] = 0;
+	}
+
 	//the file pointer is left exactly where the previous read ended, so reads
 	//are sequential and no fseek is required
 	if ((result = fread (manager->input_buffers[chunk_id],
@@ -310,9 +335,9 @@ int refill_buffer (Manager * manager, int chunk_id) {
 }
 
 void flush_output_buffers (Manager *manager, int chunk_id) {
-	//write to the persistent per-chunk file pointer; writes are sequential so
-	//no reopen/fseek is needed between flushes.
-	Fwrite (manager->output_buffers[chunk_id], sizeof (GlobalRecord), manager->output_buffer_positions[chunk_id], manager->output_fps[chunk_id]);
+	//output lives in the front of the shared input buffer; writes are sequential
+	//so no reopen/fseek is needed between flushes.
+	Fwrite (manager->input_buffers[chunk_id], sizeof (GlobalRecord), manager->output_buffer_positions[chunk_id], manager->output_fps[chunk_id]);
 }
 
 void clean_up(Manager * manager){
@@ -328,9 +353,6 @@ void clean_up(Manager * manager){
 	free(manager->input_file_positions);
 	free(manager->input_buffer_positions);
 	free(manager->input_buffer_lengths);
-	for (i=0; i<manager->total_chunks;i++)
-		free(manager->output_buffers [i]);
-	free(manager->output_buffers);
 	free(manager->output_buffer_positions);
 	for (i=0; i<manager->total_chunks;i++)
 		if (manager->output_fps[i]) fclose(manager->output_fps[i]);
@@ -345,9 +367,12 @@ void setup(Manager * manager){
 	long mem_budget = MERGE_BUFFER_FACTOR * manager->working_chunk_size;
 
 	manager->input_file_positions  = (int *) Calloc (manager->total_chunks * sizeof(int));
-	//allocate input buffers
+	//allocate the per-chunk shared input/output buffers. Input and output share
+	//one buffer, so the full 2*mem_budget goes to input capacity (2x the old
+	//input-only size) while total merge RAM stays the same as the previous
+	//separate input+output buffers.
 	manager->input_buffers = (RunRecord **) Calloc (manager->total_chunks * sizeof (RunRecord *));
-	manager->input_buffer_capacity = mem_budget / (sizeof(RunRecord)*(manager->total_chunks));
+	manager->input_buffer_capacity = (2 * mem_budget) / (sizeof(RunRecord)*(manager->total_chunks));
 	if (manager->input_buffer_capacity < 1) manager->input_buffer_capacity = 1;
 	for (i=0; i<manager->total_chunks;i++)
 		manager->input_buffers [i] = (RunRecord *) Calloc ((size_t)manager->input_buffer_capacity *sizeof(RunRecord));
@@ -365,13 +390,8 @@ void setup(Manager * manager){
 	manager->input_buffer_positions  = (int *) Calloc (manager->total_chunks * sizeof(int));
 	manager->input_buffer_lengths  = (int *) Calloc (manager->total_chunks * sizeof(int));
 
-	//allocate output buffers - one per chunk; each stores (rank, count) records on disk
-	manager->output_buffer_capacity =  mem_budget / (sizeof(GlobalRecord)*(manager->total_chunks));
-	if (manager->output_buffer_capacity < 1) manager->output_buffer_capacity = 1;
-	manager->output_buffers = (GlobalRecord **) Calloc (manager->total_chunks * sizeof (GlobalRecord*));
-	for (i=0; i<manager->total_chunks;i++)
-		manager->output_buffers [i] = (GlobalRecord *) Calloc ((size_t)manager->output_buffer_capacity *sizeof(GlobalRecord));
-
+	//output records are overlaid onto input_buffers; only the per-chunk write
+	//cursor is needed (records flushed to global_<chunk> at each refill).
 	manager->output_buffer_positions  = (int *) Calloc (manager->total_chunks * sizeof(int));
 
 	//open one persistent file pointer per chunk for sequential output writes;

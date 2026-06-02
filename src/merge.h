@@ -5,8 +5,10 @@
 #include "algorithm.h"
 
 // Derived memory budget for merge buffers. Scales with the runtime chunk size.
-// Each chunk gets working_chunk_size * MERGE_BUFFER_FACTOR bytes of input
-// buffer (and the same for output buffers), divided across all total_chunks.
+// Input and output share one buffer per chunk (output GlobalRecords are written
+// into the front over already-consumed input slots), so the whole 2*budget is
+// spent on input capacity: total merge RAM is 2 * MERGE_BUFFER_FACTOR *
+// working_chunk_size, divided across all total_chunks.
 #define MERGE_BUFFER_FACTOR 10L
 
 typedef struct heap_element {
@@ -31,14 +33,15 @@ typedef struct merge_manager {
 	int *input_file_positions;             //current position in each file, -1 if the run is complete
 	FILE **input_fps;                      //one open file pointer per chunk for sequential run reads
 
-	RunRecord **input_buffers; //array of buffers to hold part of each run
+	//Each chunk's buffer is shared for input and output: input RunRecords are read
+	//from the front; resolved output GlobalRecords (smaller, 9B vs 14B) are written
+	//back into the front over slots already copied into the heap. See merge.c.
+	RunRecord **input_buffers; //array of buffers to hold part of each run (also holds output)
 	int *input_buffer_positions; //position in current input buffer, if no need to refill  - -1
-	int input_buffer_capacity; //how many elements max can each hold
+	int input_buffer_capacity; //how many input elements max can each hold
 	int *input_buffer_lengths;  //number of actual elements currently in input buffer - can be less than max capacity
 
-	GlobalRecord** output_buffers;     //per-chunk buffers of (resolved rank, local count) records, flushed to global_<chunk>
-	int *output_buffer_positions;              //where to add next element in each output buffer
-	int output_buffer_capacity;             //how many elements max each output buffer can hold
+	int *output_buffer_positions;              //GlobalRecord write offset into the shared buffer (records); reset to 0 at each refill/flush
 	FILE **output_fps;                 //one persistent output file pointer per chunk; writes are sequential so we never reopen on each flush
 
 	int current_heap_size;
