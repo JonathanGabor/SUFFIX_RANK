@@ -77,3 +77,11 @@ src/tmp
 
 profile.json.gz
 .vscode
+
+autoresearch
+
+AGENTS.md
+.claude
+
+src/inputs/*.txt
+src/inputs/*.bin
