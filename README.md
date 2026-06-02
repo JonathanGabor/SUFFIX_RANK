@@ -7,16 +7,26 @@ SUFFIX_RANK is an out-of-core suffix array construction implementation. The pipe
 ```
 cd src
 make
-./suffixrank.sh INPUT_FOLDER [CHUNK_SIZE] [--verify]
+./suffixrank.sh INPUT_FILE [MEMORY_LIMIT] [--chunk-size N] [--verify]
 ```
-CHUNK_SIZE:  positive power of 2 (default 16777216).
-  Note that the algorithm will use 20 times this amount of RAM in bytes (so by default, it will use ~336 MB).
+`INPUT_FILE`: the single file to index (the string to build the suffix array for).
 
---verify: verify the correctness of the suffix array after creation
+`MEMORY_LIMIT`: working-RAM budget, given with a human-readable suffix (`8G`, `512M`,
+  `2048K`) or as plain bytes. Default `335544320` (~336 MB). The in-memory chunk
+  size (in elements) is derived as `MEMORY_LIMIT / 20`, since total working RAM is
+  about `20 x chunk_size` bytes.
 
-**Note:** For inputs much larger than CHUNK_SIZE, you may need to run `ulimit -n 1024` (or higher) to increase the open-file descriptor limit.
+`--chunk-size N`: pin the chunk size (elements) directly, bypassing the
+  `MEMORY_LIMIT` derivation (handy for benchmarking). The chunk size need **not**
+  be a power of two.
 
-Currently works on byte alphabets only.
+`--verify`: verify the correctness of the suffix array after creation.
+
+**Note:** For inputs much larger than the chunk size, you may need to run
+`ulimit -n 1024` (or higher) to increase the open-file descriptor limit.
+
+Works on byte alphabets only, and on a **single input file** (one string with one
+trailing sentinel). Multi-file input is not supported.
 
 ### Dependency
 
@@ -34,15 +44,23 @@ DIVSUFSORT_PREFIX = /path/to/libdivsufsort/install
 
 You can also override `DSS_INC` and `DSS_LIB` directly there if your install layout is unusual.
 
-Sample input folder can be downloaded from [here](https://drive.google.com/file/d/1B9muEMI97aF8-Zj_SCxHzA1tMCjtNCbR/view).  Larger inputs are available [here](https://barsky.ca/marina/SR/suffix_rank/index.html#datasets-link).
+Sample inputs can be downloaded from [here](https://drive.google.com/file/d/1B9muEMI97aF8-Zj_SCxHzA1tMCjtNCbR/view) (pick a single file from the archive).  Larger inputs are available [here](https://barsky.ca/marina/SR/suffix_rank/index.html#datasets-link).
 
 The output suffix array will be in the "output" folder.
 
 ### Input encoding
 
-Files in `INPUT_FOLDER` are processed in sorted lexicographic filename order. Each file becomes one logical string and gets a distinct trailing sentinel.
+The input is a single file, treated as one string with one trailing sentinel.
 
-The default initializer reserves byte codes for those sentinels before passing chunks to divsufsort, then shifts real input bytes above that reserved range. With `N` input files, real input bytes must be `<= 254 - N` so there is room for all sentinel codes plus the SAscan Z-transform increment.
+The initializer assigns each position an initial rank from a **k-mer bucket sort**:
+it scans the file to find which byte values occur, picks the largest `k` whose
+k-mer histogram fits the RAM budget, and ranks every position by its first `k`
+characters. This lets the prefix-doubling loop start at prefix length `k` (and
+then double: `k, 2k, 4k, ...`) instead of at 1, skipping the early iterations.
+
+For divsufsort, the initializer also writes byte chunks: byte code `0` is reserved
+for the sentinel, real input bytes are shifted up by 1, and code `255` is left for
+the SAscan Z-transform increment — so every input byte must be `<= 253`.
 
 ### SAscan acknowledgement
 

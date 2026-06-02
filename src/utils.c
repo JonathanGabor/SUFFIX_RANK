@@ -44,17 +44,14 @@ void * Calloc (size_t num_bytes) {
 	return result;
 }
 
-// Parse a chunk-size CLI argument. Must be a positive power of 2.
-// Exits with a clear message otherwise.
+// Parse a chunk-size CLI argument. Must be a positive integer. Need not be a
+// power of two: refine/update locate the next rank via division/modulo, and the
+// position math elsewhere only relies on chunks being uniformly sized.
 long parse_chunk_size (const char *arg) {
 	char *end = NULL;
 	long value = strtol(arg, &end, 10);
 	if (end == arg || *end != '\0' || value <= 0) {
 		fprintf(stderr, "Invalid chunk size \"%s\": must be a positive integer\n", arg);
-		exit(1);
-	}
-	if ((value & (value - 1)) != 0) {
-		fprintf(stderr, "Invalid chunk size %ld: must be a power of 2\n", value);
 		exit(1);
 	}
 	return value;

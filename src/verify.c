@@ -24,7 +24,7 @@ typedef struct verify_record {
 	long position;       // global position p
 	long next_rank;      // ranks_*[p+1], or LONG_MAX if p == N-1
 	uint32_t slot;       // local rank slot in the destination rank chunk
-	uint32_t first_key;  // sentinels first by file id, then real symbols
+	uint32_t first_key;  // trailing sentinel first (0), then real symbols by byte
 } VerifyRecord;
 
 typedef struct {
@@ -55,16 +55,18 @@ static void pw_close(PartitionWriter *w) {
 	free(w->buf);
 }
 
-static uint32_t encode_first_key(const InputStream *stream, uint32_t char_val, int sent_id) {
+// Monotone first-character key for adjacent-suffix comparison: the trailing
+// sentinel (char_val 0, sent_id 0) is smallest; real symbols sort by byte above.
+static uint32_t encode_first_key(uint32_t char_val, int sent_id) {
 	if (char_val == 0) return (uint32_t) sent_id;
-	return (uint32_t) stream->n_files + char_val;
+	return 1u + char_val;
 }
 
-static int verify_partition(const char *input_dir, const char *ranks_dir,
+static int verify_partition(const char *input_file, const char *ranks_dir,
                             const char *tmp_dir, int total_chunks,
                             long W) {
 	InputStream stream;
-	if (input_stream_open(&stream, input_dir) != SUCCESS) {
+	if (input_stream_open(&stream, input_file) != SUCCESS) {
 		return FAILURE;
 	}
 	if (W > (long) UINT32_MAX) {
@@ -145,7 +147,7 @@ static int verify_partition(const char *input_dir, const char *ranks_dir,
 			rec.position = (long) chunk_id * W + i;
 			rec.next_rank = next_rank;
 			rec.slot = (uint32_t) slot;
-			rec.first_key = encode_first_key(&stream, cv, sid);
+			rec.first_key = encode_first_key(cv, sid);
 			pw_emit(&writers[target], &rec);
 		}
 	}
@@ -370,10 +372,10 @@ static int verify_check(const char *sa_dir, const char *tmp_dir,
 
 int main(int argc, char **argv) {
 	if (argc < 7) {
-		puts("Run ./verify <input_dir> <ranks_dir> <sa_dir> <tmp_dir> <total_chunks> <chunk_size>");
+		puts("Run ./verify <input_file> <ranks_dir> <sa_dir> <tmp_dir> <total_chunks> <chunk_size>");
 		return FAILURE;
 	}
-	const char *input_dir = argv[1];
+	const char *input_file = argv[1];
 	const char *ranks_dir = argv[2];
 	const char *sa_dir = argv[3];
 	const char *tmp_dir = argv[4];
@@ -385,7 +387,7 @@ int main(int argc, char **argv) {
 		return FAILURE;
 	}
 
-	if (verify_partition(input_dir, ranks_dir, tmp_dir, total_chunks, W) != SUCCESS)
+	if (verify_partition(input_file, ranks_dir, tmp_dir, total_chunks, W) != SUCCESS)
 		return FAILURE;
 	if (verify_check(sa_dir, tmp_dir, total_chunks, W) != SUCCESS)
 		return FAILURE;

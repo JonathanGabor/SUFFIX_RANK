@@ -2,13 +2,12 @@
 #include "algorithm.h"
 #include <limits.h>
 
-int update_local_ranks (char * rank_dir, char * temp_dir, int total_chunks, int chunk_id, int h,
+int update_local_ranks (char * rank_dir, char * temp_dir, int total_chunks, int chunk_id, long prefix_len,
                         long working_chunk_size,
                         int40 * buffer_current, int * sa_buffer, GlobalRecord * global_buf){
-	int size_order = 0;
-	while((working_chunk_size >> size_order) > 1) {size_order++;}
-	long next_chunk_dist = h > size_order ? 1L<<(h-size_order) : 0;
-	if ((next_chunk_dist + chunk_id) > total_chunks-1) return EMPTY;
+	// Same EMPTY predicate refine uses, so the two agree on which chunks have runs.
+	NextRankLoc loc = next_rank_loc(prefix_len, working_chunk_size, chunk_id, total_chunks);
+	if (loc.is_empty) return EMPTY;
 
 	char file_name[MAX_PATH_LENGTH];
 
@@ -90,17 +89,18 @@ int update_local_ranks (char * rank_dir, char * temp_dir, int total_chunks, int 
 int main (int argc, char **argv){
 	char * rank_dir;
 	char * temp_dir;
-	int chunk_id, total_chunks, h;
+	int chunk_id, total_chunks;
+	long prefix_len;
 
 	if (argc<6) {
-		puts ("Run ./update <local_ranks_dir> <temp_dir> <total_chunks> <h> <working_chunk_size>");
+		puts ("Run ./update <local_ranks_dir> <temp_dir> <total_chunks> <prefix_len> <working_chunk_size>");
 		return FAILURE;
 	}
 
 	rank_dir = argv[1];
 	temp_dir = argv[2];
 	total_chunks = atoi(argv[3]);
-	h = atoi(argv[4]);
+	prefix_len = atol(argv[4]);
 	long working_chunk_size = parse_chunk_size(argv[5]);
 
 	//allocate buffers: current ranks (mutated in place), local SA, and the
@@ -111,7 +111,7 @@ int main (int argc, char **argv){
 
 	int more_runs = EMPTY;
     for (chunk_id=0; chunk_id<total_chunks; chunk_id++) {
-  	   int result = update_local_ranks (rank_dir, temp_dir, total_chunks, chunk_id, h,
+  	   int result = update_local_ranks (rank_dir, temp_dir, total_chunks, chunk_id, prefix_len,
   	                                    working_chunk_size,
   	                                    buffer_current, sa_buffer, global_buf);
        if (result == FAILURE){
