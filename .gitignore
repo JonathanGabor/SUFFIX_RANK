@@ -73,5 +73,7 @@ src/Makefile.local
 
 .DS_Store
 
-src/input_binary
 src/tmp
+
+profile.json.gz
+.vscode
