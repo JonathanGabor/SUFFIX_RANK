@@ -35,12 +35,9 @@ long compare_heap_elements (HeapElement *a, HeapElement *b) {
 	if (a->current_rank == b->current_rank ) {
 		if (a->next_rank == b->next_rank)
 			return a->chunk_id - b->chunk_id;
-		//cast to long: int32 ranks span up to +/-2^31, so the difference of two
-		//absolute values can exceed INT_MAX and must be computed in long.
-		return (long) ABSOLUTE(a->next_rank) - (long) ABSOLUTE (b->next_rank);
+		return a->next_rank - b->next_rank;
 	}
-
-	return (long) a->current_rank - (long) b->current_rank;
+	return a->current_rank - b->current_rank;
 }
 
 //manager fields should be already initialized in the caller
@@ -264,8 +261,11 @@ void heap_to_output ( Manager *manager, HeapElement *current, OutputElement *res
 			result->new_rank = manager->updated_rank;         //not resolved, because current is the same
 		}
 		else { //current rank is the same, but next ranks are different
-			//if previous combination of current-next had count=1 then previous is resolved
-			result->new_rank = manager->pair_count == 1 ? -manager->updated_rank : manager->updated_rank;
+			//the rank itself is always the (non-negative) global rank; if the previous
+			//combination of current-next had count=1 then previous is resolved, signaled
+			//to update by writing count=0 (a resolved run always covers exactly 1 SA entry)
+			result->new_rank = manager->updated_rank;
+			if (manager->pair_count == 1) result->count = 0;
 			//in any case base rank is increased by counts so far - adjusting future new rank for current
 			manager->updated_rank += manager->pair_count;
 			//reset counts so far to the current's count
@@ -273,8 +273,9 @@ void heap_to_output ( Manager *manager, HeapElement *current, OutputElement *res
 		}
 	}
 	else { //current ranks of 2 tuples are different
-		//if previous combination of current-next had count=1 then previous is resolved
-		result->new_rank = manager->pair_count == 1 ? -manager->updated_rank : manager->updated_rank;
+		//if previous combination of current-next had count=1 then previous is resolved (count=0)
+		result->new_rank = manager->updated_rank;
+		if (manager->pair_count == 1) result->count = 0;
 		manager->updated_rank = current->current_rank;
 
 		//reset counts so far to the current's count
@@ -283,16 +284,17 @@ void heap_to_output ( Manager *manager, HeapElement *current, OutputElement *res
 }
 
 void heap_to_output_last ( Manager *manager, HeapElement *current, OutputElement *result) {
-	//if this is the only record - both first and last
+	result->new_rank = manager->updated_rank;
+	//if this is the only record - both first and last - it is a resolved
+	//singleton, signaled to update with count=0 (rank stays the global rank)
 	if (current->count == 1 && (manager->last_transferred.chunk_id == -1
 			|| current->current_rank != manager->last_transferred.current_rank
 			|| current->next_rank != manager->last_transferred.next_rank)) {
-				result->new_rank = -1 * manager->updated_rank;
+		result->count = 0;
 	}
 	else {
-		result->new_rank = manager->updated_rank;
+		result->count = current->count;
 	}
-	result->count = current->count;
 	result->chunk_id = current->chunk_id;
 }
 

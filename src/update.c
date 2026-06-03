@@ -47,24 +47,31 @@ int update_local_ranks (char * rank_dir, char * temp_dir, int total_chunks, int 
 	}
 	fclose (global_resolved_FP);
 
-	// Apply each group's resolved rank to the next <count> SA entries in order.
-	// Suffixes resolved this round (rank <= 0) are dropped from the SA by
-	// shifting later entries left over the gap (compaction via displacement).
+	// Apply each group's rank to the next <count> SA entries in order. A run
+	// resolved this round is signaled by count==0 (it is always a global
+	// singleton, so it covers exactly one SA entry); its rank is still stored
+	// so it remains a valid next-rank for others, but it is dropped from the SA
+	// by shifting later entries left over the gap (compaction via displacement).
 	m = 0;
 	int displacement = 0;
 	for (q = 0; q < total_resolved; q++) {
 		long rank = i40_load(&global_buf[q].rank);
 		long cnt  = i32_load(&global_buf[q].count);
-		long j;
-		for (j = 0; j < cnt; j++) {
+		if (cnt == 0) {
 			int pos = sa_buffer[m];
 			i40_store(&buffer_current[pos], rank);
-			if (rank <= 0) {
-				displacement++;
-			} else if (displacement) {
-				sa_buffer[m-displacement] = sa_buffer[m];
-			}
+			displacement++;
 			m++;
+		} else {
+			long j;
+			for (j = 0; j < cnt; j++) {
+				int pos = sa_buffer[m];
+				i40_store(&buffer_current[pos], rank);
+				if (displacement) {
+					sa_buffer[m-displacement] = sa_buffer[m];
+				}
+				m++;
+			}
 		}
 	}
 	if (m != sa_length) {

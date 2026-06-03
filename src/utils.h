@@ -16,14 +16,13 @@
 #define DEFAULT_CHAR 35
 #define MAX_PATH_LENGTH 1024
 
-#define ABSOLUTE(a) (((a) > (0)) ? (a) : ((0)-(a)))
 #define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
 #define MAX(X, Y) (((X) > (Y)) ? (X) : (Y))
 #define SWAP(p, q)      (tmp=sa[(p)], sa[(p)]=sa[(q)], sa[(q)]=tmp)
 #define MED3(a, b, c)   (a<b) ?                        \
         ((b<c) ? (b) : ((a<c) ? (c) : (a)))       \
         : ((b>c) ? (b) : ((a>c) ? (c) : (a)))
-#define KEY(a) ABSOLUTE(next_ranks[sa[(a)]])
+#define KEY(a) (next_ranks[sa[(a)]])
 
 // WORKING_CHUNK_SIZE is a runtime parameter passed via the CLI to each binary
 // that needs it (see suffixrank.sh). chunk_size must be a positive integer
@@ -35,10 +34,12 @@
 #define FAILURE 1
 #define EMPTY 2
 
-// 40-bit signed integer, stored as 5 little-endian bytes. Rank values are
+// 40-bit unsigned integer, stored as 5 little-endian bytes. Rank values are
 // narrowed to this on disk and in the large streaming/rank buffers: 8 bytes
 // (long) is wasteful, but 32 bits is too small for the 100s-of-GB inputs the
-// algorithm must remain viable for. 40 bits covers +/-2^39 (~5.5e11) ranks.
+// algorithm must remain viable for. Ranks are non-negative magnitudes
+// (0 = sentinel, 1..N-1 = real suffixes); resolution is signaled out-of-band
+// via a count of 0, never via sign. 40 bits covers [0, 2^40) (~1.1e12) ranks.
 // Hot in-memory comparisons unpack to int64 once, so the per-access cost stays
 // off the heap's inner loop.
 typedef struct { uint8_t b[5]; } int40;
@@ -46,7 +47,7 @@ typedef struct { uint8_t b[5]; } int40;
 static inline int64_t i40_load(const int40 *p) {
 	uint32_t lo;
 	memcpy(&lo, p->b, 4);                 // low 32 bits (unaligned-safe)
-	int8_t hi = (int8_t) p->b[4];         // top 8 bits, sign-extended
+	uint8_t hi = p->b[4];                 // top 8 bits, zero-extended (unsigned)
 	return (int64_t) lo | ((int64_t) hi << 32);
 }
 

@@ -22,7 +22,7 @@ void create_pairs(char * ranks_dir, char * output_dir, int chunk_id, int total_c
 	long *bucket_starts = (long *) Calloc(total_chunks * sizeof(long));
 
 	for (i=0; i < num_elements; i++) {
-		bucket_starts[(-i40_load(&current_rank[i])) / working_chunk_size]++;
+		bucket_starts[i40_load(&current_rank[i]) / working_chunk_size]++;
 	}
 
 	long sum = 0;
@@ -34,7 +34,7 @@ void create_pairs(char * ranks_dir, char * output_dir, int chunk_id, int total_c
 	}
 
 	for (i=0; i < num_elements; i++) {
-		long val = -i40_load(&current_rank[i]);
+		long val = i40_load(&current_rank[i]);
 		long idx = (long)i + (long)chunk_id * working_chunk_size;
 		InverseRecord *dst = &inverse_buffer[bucket_starts[val / working_chunk_size]++];
 		i40_store(&dst->index, idx);

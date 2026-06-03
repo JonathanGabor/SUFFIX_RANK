@@ -7,12 +7,12 @@
 //
 // Phase A: stream input symbols + ranks_* in position order. For each position
 // p emit a compact VerifyRecord (local rank slot, position, next_rank,
-// first_key), routed into the destination rank-chunk file tmp/verify_<(-rank)/W>.
+// first_key), routed into the destination rank-chunk file tmp/verify_<rank/W>.
 // Mirrors create_pairs.c's partition-by-rank-bucket pattern.
 //
 // Phase B: per rank-chunk, counting-sort records into rank order using
 // slot recorded in each temp record. This simultaneously verifies that ranks_*
-// forms a permutation of [-N+1, 0]. Then stream-check positions against
+// forms a permutation of [0, N-1]. Then stream-check positions against
 // suffixarray_<k>[i] (SA inverts ISA), and adjacent-compare suffixes via
 // (first_key, next_rank).
 
@@ -22,7 +22,7 @@
 
 typedef struct verify_record {
 	long position;       // global position p
-	long next_rank;      // ranks_*[p+1], or LONG_MAX if p == N-1
+	long next_rank;      // ranks_*[p+1], or -1 if p == N-1 (shortest, sorts first)
 	uint32_t slot;       // local rank slot in the destination rank chunk
 	uint32_t first_key;  // trailing sentinel first (0), then real symbols by byte
 } VerifyRecord;
@@ -125,11 +125,11 @@ static int verify_partition(const char *input_file, const char *ranks_dir,
 			} else if (have_next_first) {
 				next_rank = i40_load(&next_first);
 			} else {
-				next_rank = LONG_MAX;  // p == N-1: shorter suffix sorts first
+				next_rank = -1;  // p == N-1: shorter suffix sorts first (< any rank >= 0)
 			}
 
-			long target = (-cur_rank) / W;
-			long slot = (-cur_rank) - target * W;
+			long target = cur_rank / W;
+			long slot = cur_rank - target * W;
 			if (target < 0 || target >= total_chunks) {
 				fprintf(stderr,
 				        "Rank %ld at position %ld maps to bucket %ld (out of [0, %d))\n",
@@ -205,10 +205,11 @@ static int file_record_count(FILE *fp, const char *path, long *count_out) {
 static int lex_less_strict(uint32_t p_first_key, long p_next_rank,
                            uint32_t c_first_key, long c_next_rank) {
 	if (p_first_key != c_first_key) return p_first_key < c_first_key;
-	// Tie on T[p]: lex-smaller iff next_rank is lex-smaller. Rank 0 is the
-	// lex-smallest in this codebase's sign convention, so lex_smaller(a,b)
-	// numerically is a > b.
-	return p_next_rank > c_next_rank;
+	// Tie on T[p]: lex-smaller iff next_rank is lex-smaller. Ranks are
+	// non-negative magnitudes (0 = sentinel, the lex-smallest), so a smaller
+	// rank is lex-smaller: lex_smaller(a,b) numerically is a < b. The empty
+	// next (p == N-1) is encoded as -1, smaller than any rank >= 0.
+	return p_next_rank < c_next_rank;
 }
 
 static int verify_check(const char *sa_dir, const char *tmp_dir,
@@ -304,7 +305,7 @@ static int verify_check(const char *sa_dir, const char *tmp_dir,
 				if (positions[i] != sa_read_buf[j]) {
 					fprintf(stderr,
 					        "SA mismatch at rank %ld: ranks_* says position %ld, suffixarray_%d[%ld] = %ld\n",
-					        -((long) k * W + i), positions[i], k, i, sa_read_buf[j]);
+					        ((long) k * W + i), positions[i], k, i, sa_read_buf[j]);
 					fclose(saFP);
 					return FAILURE;
 				}
@@ -331,7 +332,7 @@ static int verify_check(const char *sa_dir, const char *tmp_dir,
 					        "TEST FAILED at rank %ld: suffix at pos %ld not lex-less than suffix at pos %ld\n"
 					        "  prev: first_key=%u next_rank=%ld\n"
 					        "  curr: first_key=%u next_rank=%ld\n",
-					        -((long) k * W + i),
+					        ((long) k * W + i),
 					        prev_position, positions[i],
 					        prev_first_key, prev_next_rank,
 					        first_keys[i], next_ranks[i]);
