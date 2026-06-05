@@ -1,10 +1,8 @@
-// refine: paired with the divsufsort/SAscan-based init.
-//
-// Because init writes a true partial suffix array (not just a bucket sort),
+// Because init writes a true partial suffix array,
 // sa_buffer is already in local lex order; positions sharing the same
 // current_rank are sub-sorted by what follows. So refine can produce RunRecords
 // with a single linear scan over sa_buffer, emitting whenever (curr, next)
-// changes. No grouping, no tsort, no write-back of sa_buffer.
+// changes.
 
 extern "C" {
 #include "utils.h"

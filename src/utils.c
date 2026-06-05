@@ -1,5 +1,6 @@
 #include "utils.h"
 #include <errno.h>
+#include <limits.h>
 #include <fcntl.h>
 
 static void report_open_failure(const char *description, const char *file_name) {
@@ -52,6 +53,12 @@ long parse_chunk_size (const char *arg) {
 	long value = strtol(arg, &end, 10);
 	if (end == arg || *end != '\0' || value <= 0) {
 		fprintf(stderr, "Invalid chunk size \"%s\": must be a positive integer\n", arg);
+		exit(1);
+	}
+	// Chunk size is kept within 32-bit int to avoid 64-bit-index complexity;
+	// in practice it is never this large anyway.
+	if (value > INT_MAX) {
+		fprintf(stderr, "Invalid chunk size \"%s\": must be <= %d\n", arg, INT_MAX);
 		exit(1);
 	}
 	return value;

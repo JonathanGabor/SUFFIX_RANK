@@ -1,7 +1,5 @@
 #!/bin/bash
 
-# Drives the default divsufsort/SAscan-based pipeline.
-
 if date +%s.%N &>/dev/null; then
     timestamp() { date +%s.%N; }
 else
@@ -24,11 +22,6 @@ CHUNKS=0
 
 TRUESTART=$($DATE)
 
-# RAM budget model: total working memory is ~20 * chunk_size bytes (chunk_size in
-# elements). So the user gives a memory limit in bytes and we derive
-# chunk_size = memory_limit / 20. --chunk-size pins chunk_size directly instead
-# (handy for benchmarking). Default memory limit reproduces the old 16 Mi-element
-# default (20 * 16777216 bytes).
 RAM_DIVISOR=20
 DEFAULT_MEM_BYTES=$(( RAM_DIVISOR * 16777216 ))
 
@@ -97,6 +90,12 @@ else
     if (( CHUNK_SIZE <= 0 )); then
         echo "Memory limit ${MEM_BYTES} is too small (needs at least ${RAM_DIVISOR} bytes)"
         exit 1
+    fi
+    # Chunk size is kept within 32-bit int to avoid 64-bit-index complexity;
+    # in practice it is never this large anyway.
+    if (( CHUNK_SIZE > 2147483647 )); then
+        CHUNK_SIZE=2147483647
+        echo "Clamping chunk size to INT_MAX (${CHUNK_SIZE})"
     fi
     echo "Using memory limit: $MEM_BYTES bytes -> chunk size $CHUNK_SIZE elements (byte alphabet, divsufsort path)"
 fi

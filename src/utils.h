@@ -57,18 +57,19 @@ static inline void i40_store(int40 *p, int64_t v) {
 	p->b[4] = (uint8_t) ((uint64_t) v >> 32);
 }
 
-// 32-bit signed integer, stored as 4 little-endian bytes, alignment 1.
-// Used for chunk-local run lengths (count <= chunk_size <= 2^30), so it fits
-// in 32 bits while avoiding the struct padding a plain `int` would force.
+// 32-bit unsigned integer, stored as 4 little-endian bytes, alignment 1.
+// Used for chunk-local run lengths (count <= chunk_size <= 2^30, always
+// non-negative), so it fits in 32 bits while avoiding the struct padding a
+// plain `int` would force.
 typedef struct { uint8_t b[4]; } int32p;
 
-static inline int32_t i32_load(const int32p *p) {
-	int32_t v;
+static inline uint32_t i32_load(const int32p *p) {
+	uint32_t v;
 	memcpy(&v, p->b, 4);
 	return v;
 }
 
-static inline void i32_store(int32p *p, int32_t v) {
+static inline void i32_store(int32p *p, uint32_t v) {
 	memcpy(p->b, &v, 4);
 }
 

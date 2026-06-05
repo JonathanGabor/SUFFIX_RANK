@@ -1,8 +1,7 @@
 // init: divsufsort-based initialization.
 //
 // Produces ranks_<id> files and a true partial suffix array sa_<id> per chunk
-// via libdivsufsort and a SAscan-style reverse-block + gt_head pass. This lets
-// refine skip tsort and emit RunRecords with a single linear scan.
+// via libdivsufsort and a SAscan-style reverse-block + gt_head pass.
 //
 // Restrictions: byte alphabet only. Input bytes must leave room for one
 // divsufsort byte code per file sentinel plus the Z-transform increment.
