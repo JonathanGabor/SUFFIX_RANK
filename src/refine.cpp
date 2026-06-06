@@ -56,6 +56,7 @@ static inline void emit_run(int64_t next, int count,
 
 static int generate_local_runs_fast(char *rank_dir, char *runs_dir, int total_chunks,
                                     int chunk_id, long prefix_len, long working_chunk_size,
+                                    int lo, int hi,
                                     int40 *next_ranks_buffer,
                                     int *sa_buffer,
                                     RankRun *runs_buffer) {
@@ -81,33 +82,53 @@ static int generate_local_runs_fast(char *rank_dir, char *runs_dir, int total_ch
 
 	OpenBinaryFileRead(&saFP, sa_file_name);
 
-	// Fill next_ranks_buffer[local] = rank of (chunk_id*S + local + prefix_len).
+	// Fill next_ranks_buffer[p] = rank of (chunk_id*S + p + prefix_len) only for
+	// the live window p in [lo, hi] (this chunk's active SA positions). Positions
+	// outside the window are never read by the scan below, so we skip their I/O.
 	// Aligned case: the window starts at the head of base_chunk. Otherwise it
 	// starts off entries into base_chunk and spills off entries into base_chunk+1.
-	if (loc.off == 0) {
-		snprintf(next_ranks_file_name, sizeof next_ranks_file_name,
-		         "%s/ranks_%d", rank_dir, loc.base_chunk);
-		OpenBinaryFileRead(&nextFP, next_ranks_file_name);
-		fread(next_ranks_buffer, sizeof(int40), (size_t) working_chunk_size, nextFP);
-		fclose(nextFP);
-	} else {
-		snprintf(next_ranks_file_name, sizeof next_ranks_file_name,
-		         "%s/ranks_%d", rank_dir, loc.base_chunk);
-		OpenBinaryFileRead(&nextFP, next_ranks_file_name);
-		long offset = loc.off * (long) sizeof(int40);
-		if (fseek(nextFP, offset, SEEK_SET)) {
-			printf("Fseek failed trying to move to position %ld in ranks file\n", loc.off);
-			exit(1);
-		}
-		long r = (long) fread(next_ranks_buffer, sizeof(int40),
-		                      (size_t) working_chunk_size, nextFP);
-		fclose(nextFP);
-		if (loc.base_chunk + 1 < total_chunks) {
+	long S = working_chunk_size;
+	if (hi >= lo) {
+		if (loc.off == 0) {
 			snprintf(next_ranks_file_name, sizeof next_ranks_file_name,
-			         "%s/ranks_%d", rank_dir, loc.base_chunk + 1);
+			         "%s/ranks_%d", rank_dir, loc.base_chunk);
 			OpenBinaryFileRead(&nextFP, next_ranks_file_name);
-			fread(next_ranks_buffer + r, sizeof(int40), (size_t) loc.off, nextFP);
+			if (fseek(nextFP, (long) lo * (long) sizeof(int40), SEEK_SET)) {
+				printf("Fseek failed trying to move to position %d in ranks file\n", lo);
+				exit(1);
+			}
+			fread(&next_ranks_buffer[lo], sizeof(int40), (size_t) (hi - lo + 1), nextFP);
 			fclose(nextFP);
+		} else {
+			long p_split = S - loc.off;        // first p that spills into base_chunk+1
+			// base_chunk part: p in [lo, min(hi, p_split-1)] at file index off+p.
+			long a_hi = hi < p_split - 1 ? hi : p_split - 1;
+			if (a_hi >= lo) {
+				snprintf(next_ranks_file_name, sizeof next_ranks_file_name,
+				         "%s/ranks_%d", rank_dir, loc.base_chunk);
+				OpenBinaryFileRead(&nextFP, next_ranks_file_name);
+				long offset = (loc.off + (long) lo) * (long) sizeof(int40);
+				if (fseek(nextFP, offset, SEEK_SET)) {
+					printf("Fseek failed trying to move to position %ld in ranks file\n", loc.off + lo);
+					exit(1);
+				}
+				fread(&next_ranks_buffer[lo], sizeof(int40), (size_t) (a_hi - lo + 1), nextFP);
+				fclose(nextFP);
+			}
+			// base_chunk+1 part: p in [max(lo, p_split), hi] at index off+p-S.
+			long b_lo = (long) lo > p_split ? (long) lo : p_split;
+			if (b_lo <= hi && loc.base_chunk + 1 < total_chunks) {
+				snprintf(next_ranks_file_name, sizeof next_ranks_file_name,
+				         "%s/ranks_%d", rank_dir, loc.base_chunk + 1);
+				OpenBinaryFileRead(&nextFP, next_ranks_file_name);
+				long offset = (loc.off + b_lo - S) * (long) sizeof(int40);
+				if (fseek(nextFP, offset, SEEK_SET)) {
+					printf("Fseek failed trying to move to position %ld in ranks file\n", loc.off + b_lo - S);
+					exit(1);
+				}
+				fread(&next_ranks_buffer[b_lo], sizeof(int40), (size_t) (hi - b_lo + 1), nextFP);
+				fclose(nextFP);
+			}
 		}
 	}
 
@@ -166,10 +187,16 @@ int main(int argc, char **argv) {
 	int  *sa_buffer            = (int *)  Calloc((size_t) working_chunk_size * sizeof(int));
 	RankRun *runs_buffer       = (RankRun *) Calloc((size_t) (working_chunk_size / 3) * sizeof(RankRun));
 
+	// Per-chunk active-position windows: bound the next-rank slice we load.
+	int *bounds_lo = (int *) Calloc((size_t) total_chunks * sizeof(int));
+	int *bounds_hi = (int *) Calloc((size_t) total_chunks * sizeof(int));
+	bounds_load(rank_dir, total_chunks, bounds_lo, bounds_hi);
+
 	int more_runs = EMPTY;
 	for (int chunk_id = 0; chunk_id < total_chunks; chunk_id++) {
 		int result = generate_local_runs_fast(rank_dir, runs_dir, total_chunks, chunk_id, prefix_len,
 		                                      working_chunk_size,
+		                                      bounds_lo[chunk_id], bounds_hi[chunk_id],
 		                                      next_ranks_buffer,
 		                                      sa_buffer, runs_buffer);
 		if (result == FAILURE) return FAILURE;
@@ -193,5 +220,7 @@ int main(int argc, char **argv) {
 	free(next_ranks_buffer);
 	free(sa_buffer);
 	free(runs_buffer);
+	free(bounds_lo);
+	free(bounds_hi);
 	return more_runs;
 }

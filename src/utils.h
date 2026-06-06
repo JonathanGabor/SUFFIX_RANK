@@ -90,4 +90,11 @@ void tsort(int *sa, long *next_ranks, int n);
 long parse_chunk_size (const char *arg);
 long parse_mem_bytes (const char *arg);
 
+// Per-chunk active-position window [lo, hi] of each chunk's suffix array, stored
+// in <rank_dir>/bounds as total_chunks records of two int (lo, hi). An empty
+// chunk uses the sentinel lo=0, hi=-1. refine/update use the window to read (and
+// write, in update) only the live slice of the int40 ranks_<id> file.
+void bounds_load (const char *rank_dir, int total_chunks, int *lo, int *hi);
+void bounds_store (const char *rank_dir, int total_chunks, const int *lo, const int *hi);
+
 #endif

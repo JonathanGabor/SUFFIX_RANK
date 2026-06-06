@@ -5,7 +5,8 @@
 int update_local_ranks (char * rank_dir, char * temp_dir, int total_chunks, int chunk_id, long prefix_len,
                         long working_chunk_size,
                         int40 * buffer_current, int * sa_buffer, GlobalRecord * global_buf,
-                        RankRun * currents_buf, int currents_capacity){
+                        RankRun * currents_buf, int currents_capacity,
+                        int * lo, int * hi){
 	// Same EMPTY predicate refine uses, so the two agree on which chunks have runs.
 	NextRankLoc loc = next_rank_loc(prefix_len, working_chunk_size, chunk_id, total_chunks);
 	if (loc.is_empty) return EMPTY;
@@ -17,17 +18,31 @@ int update_local_ranks (char * rank_dir, char * temp_dir, int total_chunks, int 
 	FILE * saFP = NULL;
 	FILE * currents_FP = NULL;
 
-	int result, total_resolved, total_ranks, sa_length, m, q;
+	int result, total_resolved, sa_length, m, q;
 
-	// read current ranks for this chunk (mutated in place, then written back)
+	// This chunk's live window of active positions: only this slice of the int40
+	// ranks file is loaded, mutated, and written back. Positions outside the
+	// window keep their stored ranks (still valid next-ranks for other chunks).
+	int win_lo = *lo;
+	int win_hi = *hi;
+	int new_lo = INT_MAX;   // recomputed window over the survivors
+	int new_hi = -1;
+
+	// read current ranks for this chunk's window (mutated in place, written back)
 	snprintf(file_name, sizeof file_name, "%s/ranks_%d", rank_dir, chunk_id);
 	OpenBinaryFileReadWrite (&current_FP, file_name);
-	total_ranks = fread (buffer_current, sizeof(int40), working_chunk_size, current_FP);
+	if (win_hi >= win_lo) {
+		if (fseek(current_FP, (long) win_lo * (long) sizeof(int40), SEEK_SET)) {
+			printf("update: fseek to position %d in ranks file failed\n", win_lo);
+			return FAILURE;
+		}
+		fread (&buffer_current[win_lo], sizeof(int40), (size_t)(win_hi - win_lo + 1), current_FP);
+	}
 
 	// read local suffix array (sorted by curr,next for this iteration)
 	snprintf(file_name, sizeof file_name, "%s/sa_%d", rank_dir, chunk_id);
 	OpenBinaryFileRead (&saFP, file_name);
-	sa_length = fread (sa_buffer, sizeof(int), total_ranks, saFP);
+	sa_length = fread (sa_buffer, sizeof(int), working_chunk_size, saFP);
 	fclose(saFP);
 
 	// read this chunk's global (rank, count) records, in run order. They are
@@ -81,6 +96,8 @@ int update_local_ranks (char * rank_dir, char * temp_dir, int total_chunks, int 
 			for (j = 0; j < cnt; j++) {
 				int pos = sa_buffer[m];
 				i40_store(&buffer_current[pos], rank);
+				if (pos < new_lo) new_lo = pos;   // survivor: tighten next window
+				if (pos > new_hi) new_hi = pos;
 				if (displacement) {
 					sa_buffer[m-displacement] = sa_buffer[m];
 				}
@@ -99,9 +116,20 @@ int update_local_ranks (char * rank_dir, char * temp_dir, int total_chunks, int 
 		return FAILURE;
 	}
 
-	//write the updated ranks back, then the compacted suffix array
-	rewind(current_FP);
-	Fwrite (buffer_current, sizeof(int40), total_ranks, current_FP);
+	//write the updated ranks back (window slice only), then the compacted SA
+	if (win_hi >= win_lo) {
+		if (fseek(current_FP, (long) win_lo * (long) sizeof(int40), SEEK_SET)) {
+			printf("update: fseek to position %d in ranks file failed\n", win_lo);
+			return FAILURE;
+		}
+		Fwrite (&buffer_current[win_lo], sizeof(int40), (size_t)(win_hi - win_lo + 1), current_FP);
+	}
+
+	// Tighten the window to the survivors carried into the next iteration
+	// (empty sentinel lo=0, hi=-1 when the chunk fully resolved this round).
+	if (new_hi < new_lo) { new_lo = 0; new_hi = -1; }
+	*lo = new_lo;
+	*hi = new_hi;
 
 	snprintf(file_name, sizeof file_name, "%s/sa_%d", rank_dir, chunk_id);
 	OpenBinaryFileWrite (&saFP, file_name);
@@ -153,12 +181,19 @@ int main (int argc, char **argv){
 	if (currents_capacity < 2) currents_capacity = 2;
 	RankRun * currents_buf = (RankRun *) Calloc ((size_t) currents_capacity * sizeof(RankRun));
 
+	// Per-chunk active-position windows: read in, tightened to the survivors,
+	// written back for the next iteration's refine/update to slice their loads.
+	int * bounds_lo = (int *) Calloc ((size_t) total_chunks * sizeof(int));
+	int * bounds_hi = (int *) Calloc ((size_t) total_chunks * sizeof(int));
+	bounds_load(rank_dir, total_chunks, bounds_lo, bounds_hi);
+
 	int more_runs = EMPTY;
     for (chunk_id=0; chunk_id<total_chunks; chunk_id++) {
   	   int result = update_local_ranks (rank_dir, temp_dir, total_chunks, chunk_id, prefix_len,
   	                                    working_chunk_size,
   	                                    buffer_current, sa_buffer, global_buf,
-  	                                    currents_buf, currents_capacity);
+  	                                    currents_buf, currents_capacity,
+  	                                    &bounds_lo[chunk_id], &bounds_hi[chunk_id]);
        if (result == FAILURE){
          return FAILURE;
        }
@@ -167,10 +202,15 @@ int main (int argc, char **argv){
        }
     }
 
+	// Persist the tightened windows for the next iteration.
+	bounds_store(rank_dir, total_chunks, bounds_lo, bounds_hi);
+
 	free (global_buf);
 	free (currents_buf);
 	free (buffer_current);
 	free (sa_buffer);
+	free (bounds_lo);
+	free (bounds_hi);
 
 	return more_runs;
 }

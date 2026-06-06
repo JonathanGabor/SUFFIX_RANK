@@ -402,12 +402,19 @@ static int run_pass_3(const char *rank_directory,
 	if (currents_cap < 2) currents_cap = 2;
 	RankRun *currents_buf = (RankRun *) Calloc((size_t) currents_cap * sizeof(RankRun));
 
+	// Seed each chunk's active-position window: the initial SA covers every
+	// local position 0..n_X-1, so the window is the full chunk.
+	int *bounds_lo = (int *) Calloc((size_t) n_chunks * sizeof(int));
+	int *bounds_hi = (int *) Calloc((size_t) n_chunks * sizeof(int));
+
 	char path[MAX_PATH_LENGTH];
 
 	for (int chunk_id = n_chunks - 1; chunk_id >= 0; chunk_id--) {
 		chunk_X_path(path, sizeof path, chunks_directory, chunk_id);
 		long n_X = file_size_or_die(path);
 		read_all(path, X, n_X);
+		bounds_lo[chunk_id] = 0;
+		bounds_hi[chunk_id] = (int) (n_X - 1);
 
 		if (chunk_id < n_chunks - 1) {
 			// Build A = Y, the next chunk. This gives gtX:Y, used by
@@ -456,6 +463,7 @@ static int run_pass_3(const char *rank_directory,
 			        "init: chunk size %ld exceeds 32-bit divsufsort limit\n",
 			        n_X);
 			free(X); free(A); free(sa); free(ranks_buf); free(currents_buf);
+			free(bounds_lo); free(bounds_hi);
 			return FAILURE;
 		}
 		divsufsort((const unsigned char *) X, sa, (int32_t) n_X);
@@ -477,6 +485,7 @@ static int run_pass_3(const char *rank_directory,
 			fprintf(stderr, "init: short read on %s while building currents\n", path);
 			fclose(ranks_fp);
 			free(X); free(A); free(sa); free(ranks_buf); free(currents_buf);
+			free(bounds_lo); free(bounds_hi);
 			return FAILURE;
 		}
 		fclose(ranks_fp);
@@ -511,6 +520,9 @@ static int run_pass_3(const char *rank_directory,
 		fclose(currents_fp);
 	}
 
+	// Persist the seed windows for the first refine/update iteration.
+	bounds_store(rank_directory, n_chunks, bounds_lo, bounds_hi);
+
 	// Clean up the leftovers for chunk 0 (its X and gt_head are never consumed).
 	chunk_X_path(path, sizeof path, chunks_directory, 0);
 	unlink(path);
@@ -522,6 +534,8 @@ static int run_pass_3(const char *rank_directory,
 	free(sa);
 	free(ranks_buf);
 	free(currents_buf);
+	free(bounds_lo);
+	free(bounds_hi);
 	(void) last_chunk_size; // unused; sizes come from fstat per chunk
 	return SUCCESS;
 }

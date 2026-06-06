@@ -115,6 +115,7 @@ int update_local_ranks (char * rank_dir, char * temp_dir, int total_chunks, int 
                         long working_chunk_size,
                         int40 * buffer_current,
                         int * sa_buffer, GlobalRecord * global_buf,
-                        RankRun * currents_buf, int currents_capacity);
+                        RankRun * currents_buf, int currents_capacity,
+                        int * lo, int * hi);
 
 #endif

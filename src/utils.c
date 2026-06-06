@@ -201,3 +201,41 @@ void tsort(int *sa, long *next_ranks, int n){
 	tsort(sa, next_ranks, b-a);
 	tsort(sa + n-(d-c), next_ranks,  d-c);
 }
+
+// Read/write the per-chunk active-position window from <rank_dir>/bounds. The
+// file holds total_chunks records of two int (lo, hi); a single buffered I/O
+// keeps it to one fread/fwrite even with many chunks.
+void bounds_load (const char *rank_dir, int total_chunks, int *lo, int *hi) {
+	char file_name[MAX_PATH_LENGTH];
+	snprintf(file_name, sizeof file_name, "%s/bounds", rank_dir);
+	FILE *fp = NULL;
+	OpenBinaryFileRead(&fp, file_name);
+	int *buf = (int *) Calloc((size_t) total_chunks * 2 * sizeof(int));
+	size_t got = fread(buf, sizeof(int) * 2, (size_t) total_chunks, fp);
+	if (got != (size_t) total_chunks) {
+		printf("bounds_load: wanted %d records from %s but read %zu\n",
+		       total_chunks, file_name, got);
+		exit(1);
+	}
+	for (int c = 0; c < total_chunks; c++) {
+		lo[c] = buf[2 * c];
+		hi[c] = buf[2 * c + 1];
+	}
+	free(buf);
+	fclose(fp);
+}
+
+void bounds_store (const char *rank_dir, int total_chunks, const int *lo, const int *hi) {
+	char file_name[MAX_PATH_LENGTH];
+	snprintf(file_name, sizeof file_name, "%s/bounds", rank_dir);
+	FILE *fp = NULL;
+	OpenBinaryFileWrite(&fp, file_name);
+	int *buf = (int *) Calloc((size_t) total_chunks * 2 * sizeof(int));
+	for (int c = 0; c < total_chunks; c++) {
+		buf[2 * c] = lo[c];
+		buf[2 * c + 1] = hi[c];
+	}
+	Fwrite(buf, sizeof(int) * 2, (size_t) total_chunks, fp);
+	free(buf);
+	fclose(fp);
+}
