@@ -38,15 +38,26 @@ static inline void emit_run(int64_t curr, int64_t next, int count,
                             RunRecord *out_buf, int *out_count,
                             int capacity, FILE *runsFP) {
 	if (TEST_PERFORMANCE) g_count_hist[count_bucket(count)]++;
-	if (*out_count == capacity) {
-		Fwrite(out_buf, sizeof(RunRecord), (size_t) capacity, runsFP);
+	// Reserve room for an escape+overflow pair so it never splits across a flush.
+	if (*out_count + 2 > capacity) {
+		Fwrite(out_buf, sizeof(RunRecord), (size_t) *out_count, runsFP);
 		*out_count = 0;
 		if (TEST_PERFORMANCE) g_mid_chunk_flushes++;
 	}
 	RunRecord *r = &out_buf[(*out_count)++];
 	i40_store(&r->currentRank, curr);
 	i40_store(&r->nextRank, next);
-	i32_store(&r->count, count);
+	if (count < COUNT_ESCAPE) {
+		r->count = (uint8_t) count;
+	} else {
+		// Count doesn't fit a byte: write the sentinel, then an overflow record
+		// carrying the true count in currentRank (its own count byte is ignored).
+		r->count = COUNT_ESCAPE;
+		RunRecord *ov = &out_buf[(*out_count)++];
+		i40_store(&ov->currentRank, (int64_t) count);
+		i40_store(&ov->nextRank, 0);
+		ov->count = 0;
+	}
 }
 
 static int generate_local_runs_fast(char *rank_dir, char *runs_dir, int total_chunks,

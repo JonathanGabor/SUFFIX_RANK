@@ -56,7 +56,12 @@ int update_local_ranks (char * rank_dir, char * temp_dir, int total_chunks, int 
 	int displacement = 0;
 	for (q = 0; q < total_resolved; q++) {
 		long rank = i40_load(&global_buf[q].rank);
-		long cnt  = i32_load(&global_buf[q].count);
+		long cnt  = global_buf[q].count;
+		if (cnt == COUNT_ESCAPE) {
+			// Overflow: true count is carried in the next record's rank field.
+			q++;
+			cnt = i40_load(&global_buf[q].rank);
+		}
 		if (cnt == 0) {
 			int pos = sa_buffer[m];
 			i40_store(&buffer_current[pos], rank);
@@ -114,7 +119,13 @@ int main (int argc, char **argv){
 	//per-chunk global (rank,count) records read back from merge.
 	int40 * buffer_current = (int40 *) Calloc ((size_t)working_chunk_size * sizeof(int40));
 	int * sa_buffer = (int *) Calloc ((size_t)working_chunk_size * sizeof(int));
-	GlobalRecord * global_buf = (GlobalRecord *) Calloc ((size_t)working_chunk_size * sizeof(GlobalRecord));
+	// Headroom for byte-count overflow records: counts partition the local SA
+	// (sum <= working_chunk_size) and each overflow run has count >= COUNT_ESCAPE,
+	// so overflow records <= working_chunk_size/COUNT_ESCAPE. The whole-file fread
+	// needs room for every physical record (runs + overflow records).
+	size_t global_buf_capacity = (size_t)working_chunk_size
+	                           + (size_t)working_chunk_size / COUNT_ESCAPE + 2;
+	GlobalRecord * global_buf = (GlobalRecord *) Calloc (global_buf_capacity * sizeof(GlobalRecord));
 
 	int more_runs = EMPTY;
     for (chunk_id=0; chunk_id<total_chunks; chunk_id++) {

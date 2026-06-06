@@ -32,27 +32,36 @@ static inline NextRankLoc next_rank_loc(long prefix_len, long working_chunk_size
 	return loc;
 }
 
+// Sentinel byte for the variable-length count encoding below. A count byte of
+// COUNT_ESCAPE means the true count did not fit in a byte and is carried in the
+// FOLLOWING record's first rank field (currentRank for an overflow RunRecord,
+// rank for an overflow GlobalRecord). Any true count >= COUNT_ESCAPE escapes;
+// a true count of exactly 255 escapes too (it cannot be stored inline). count==0
+// (the "resolved singleton" signal) and 1..254 are stored inline in the byte.
+#define COUNT_ESCAPE 255
+
 // Rank values are stored as int40 (5 bytes) on disk and in streaming buffers.
 // This shrinks the runs_* footprint vs 8-byte long while staying valid for the
 // large (100s-of-GB) inputs the algorithm must support, where int32 would
-// overflow. count is a chunk-local run length (<= chunk_size <= 2^30), stored
-// as int32p (4 bytes, alignment 1) so the struct packs to 14 bytes with no
-// padding (a plain `int` would force alignment-4 padding to 16 bytes).
+// overflow. count is a chunk-local run length (<= chunk_size <= 2^30) stored as
+// a single byte (the common case is tiny runs); counts that don't fit a byte
+// escape via COUNT_ESCAPE + an extra overflow record (see above), so the struct
+// packs to 11 bytes with no padding.
 typedef struct run_triple {
 	int40 currentRank;
 	int40 nextRank;
-	int32p count;
+	uint8_t count;
 } RunRecord;
 
 // One per chunk-local run, written by merge to global_<chunk> in run order
-// (1:1 with refine's runs_<chunk>). Carries the resolved global rank plus the
-// run's local count, so update can apply ranks by walking the local SA
-// count-by-count without re-reading next-ranks. count is a chunk-local run
-// length (<= chunk_size <= 2^30), stored as int32p (4 bytes) so the struct is
-// 9 bytes rather than 10.
+// (1:1 with refine's runs_<chunk>, modulo overflow records). Carries the
+// resolved global rank plus the run's local count, so update can apply ranks by
+// walking the local SA count-by-count without re-reading next-ranks. count is a
+// chunk-local run length stored as a single byte with the same COUNT_ESCAPE +
+// overflow-record encoding as RunRecord, so the struct is 6 bytes.
 typedef struct global_record {
 	int40 rank;
-	int32p count;
+	uint8_t count;
 } GlobalRecord;
 
 // (position, final-rank) pair routed by rank bucket in create_pairs and

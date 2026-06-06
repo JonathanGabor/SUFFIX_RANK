@@ -1,11 +1,11 @@
 #include "merge.h"
 
-//Output GlobalRecords (9B) are overlaid onto the shared per-chunk input buffer
-//(RunRecords, 14B), written at the front over slots already copied into the heap.
-//int40/int32p are alignment-1 so the unaligned overlay is well defined.
+//Output GlobalRecords (6B) are overlaid onto the shared per-chunk input buffer
+//(RunRecords, 11B), written at the front over slots already copied into the heap.
+//int40 is alignment-1 so the unaligned overlay is well defined.
 //
 //The output cursor must never overrun into input not yet read into the heap, i.e.
-//the write must satisfy (pos+1)*9 <= 14*input_position (whole buffer is free once
+//the write must satisfy (pos+1)*6 <= 11*input_position (whole buffer is free once
 //the run is exhausted, input_position == -1). Steady state keeps the cursors in
 //lockstep with the input read leading, but across a refill the reset output
 //cursor can momentarily carry up to two pending resolutions while only one new
@@ -13,7 +13,7 @@
 //accumulated output first and restart the cursor (the just-freed front always
 //holds at least one record, so pos 0 is then safe). This self-corrects the
 //boundary; in steady state the guard never fires.
-static inline void write_output(Manager *manager, int chunk_id, int64_t rank, int count) {
+static inline void put_global(Manager *manager, int chunk_id, int64_t rank_field, uint8_t count_byte) {
 	int pos = manager->output_buffer_positions[chunk_id];
 	int p = manager->input_buffer_positions[chunk_id];
 	long avail = (p == -1) ? (long)manager->input_buffer_capacity * (long)sizeof(RunRecord)
@@ -25,9 +25,21 @@ static inline void write_output(Manager *manager, int chunk_id, int64_t rank, in
 	}
 	GlobalRecord *gr = (GlobalRecord *)((char *)manager->input_buffers[chunk_id]
 			+ (size_t)pos * sizeof(GlobalRecord));
-	i40_store(&gr->rank, rank);
-	i32_store(&gr->count, count);
+	i40_store(&gr->rank, rank_field);
+	gr->count = count_byte;
 	manager->output_buffer_positions[chunk_id] = pos + 1;
+}
+
+//Encode count as a byte, escaping large counts with an overflow record (the true
+//count goes in the overflow record's rank field). Each record is written through
+//the guarded put_global, so the overlay invariant holds even for the pair.
+static inline void write_output(Manager *manager, int chunk_id, int64_t rank, int count) {
+	if (count < COUNT_ESCAPE) {
+		put_global(manager, chunk_id, rank, (uint8_t) count);
+	} else {
+		put_global(manager, chunk_id, rank, COUNT_ESCAPE);
+		put_global(manager, chunk_id, (int64_t) count, 0);
+	}
 }
 
 //we are comparing 2 heap elements by current rank, then by next rank, if equal - by file_id
@@ -46,7 +58,7 @@ int merge_runs (Manager * manager){
 	OutputElement output_result;
 	int chunk_id;
 	HeapElement smallest;
-	RunRecord next;         //here next is of input_type
+	HeapElement next;       //decoded next run from the popped chunk
 	//1. go in the loop through all input files and fill-in initial buffers
 	if (init_merge (manager)!=SUCCESS)
 		return FAILURE;
@@ -62,7 +74,7 @@ int merge_runs (Manager * manager){
 	    	manager->pair_count =0;
 		}
 
-		result = get_next_input_element (manager, smallest.chunk_id, &next);
+		result = get_next_run (manager, smallest.chunk_id, &next);
 
 		if (result==FAILURE)
 			return FAILURE;
@@ -71,7 +83,7 @@ int merge_runs (Manager * manager){
 		//next record, replace the root with it and sift down once; otherwise
 		//pop the root (shrink heap) and sift the former-last element down.
 		if(result==SUCCESS)        //next element exists
-			replace_top_heap_element (manager, smallest.chunk_id, &next);
+			replace_top_heap_element (manager, &next);
 		else
 			pop_top_heap_element (manager);
 
@@ -103,7 +115,7 @@ int merge_runs (Manager * manager){
 
 int init_merge (Manager * manager) {
 	int i, ret;
-	RunRecord first = {0};
+	HeapElement first;
 
 	for(i=0;i<manager->total_chunks;i++) {
 		if (refill_buffer(manager,i) == FAILURE){
@@ -114,13 +126,13 @@ int init_merge (Manager * manager) {
 
 	for (i=0;i<manager->total_chunks;i++) {
 		//get element from each buffer
-		ret = get_next_input_element (manager,i, &first);
+		ret = get_next_run (manager,i, &first);
 		if (ret==FAILURE) //at least 1 element should exist
 			return FAILURE;
 
 		//insert it into heap
 		if (ret!=EMPTY){
-			if(insert_into_heap (manager, i, &first)==FAILURE)
+			if(insert_into_heap (manager, &first)==FAILURE)
 				return FAILURE;
 		}
 	}
@@ -133,17 +145,12 @@ int init_merge (Manager * manager) {
 	return SUCCESS;
 }
 
-//Replace the root with a new record (from any chunk) and sift it down.
+//Replace the root with an already-decoded run (from any chunk) and sift it down.
 //Heap size is unchanged. Used on the hot path: after the minimum is consumed
 //we feed in the next record from the same chunk, avoiding a separate pop+push.
-void replace_top_heap_element (Manager * manager, int chunk_id, RunRecord *input){
-	HeapElement item;
+void replace_top_heap_element (Manager * manager, HeapElement *input){
+	HeapElement item = *input;
 	int child, parent;
-
-	item.chunk_id = chunk_id;
-	item.current_rank = i40_load(&input->currentRank);
-	item.next_rank = i40_load(&input->nextRank);
-	item.count = i32_load(&input->count);
 
 	parent = 0;
 	while ((child = (2 * parent) + 1) < manager->current_heap_size) {
@@ -187,15 +194,10 @@ void pop_top_heap_element (Manager * manager){
 	manager->heap[parent] = item;
 }
 
-int insert_into_heap (Manager * manager, int chunk_id, RunRecord *input){
+int insert_into_heap (Manager * manager, HeapElement *input){
 
-	HeapElement new_heap_element;
+	HeapElement new_heap_element = *input;
 	int child, parent;
-
-	new_heap_element.chunk_id = chunk_id;
-	new_heap_element.current_rank = i40_load(&input->currentRank);
-	new_heap_element.next_rank = i40_load(&input->nextRank);
-	new_heap_element.count = i32_load(&input->count);
 
 	if (manager->current_heap_size == manager->total_chunks) {
 		printf( "Unexpected ERROR: heap is full\n");
@@ -231,6 +233,31 @@ int get_next_input_element (Manager * manager, int chunk_id, RunRecord *result){
 			return get_next_input_element (manager,  chunk_id, result);
 		else
 			return refill_result;
+	}
+	return SUCCESS;
+}
+
+//Read one logical run from a chunk into a decoded HeapElement, resolving the
+//byte-count escape: a record with count==COUNT_ESCAPE is followed by an overflow
+//record whose currentRank field holds the true count. The escape and overflow
+//records may straddle a buffer boundary; get_next_input_element refills as needed.
+int get_next_run (Manager * manager, int chunk_id, HeapElement *out){
+	RunRecord raw;
+	int r = get_next_input_element(manager, chunk_id, &raw);
+	if (r != SUCCESS) return r;   //EMPTY or FAILURE
+
+	out->chunk_id = chunk_id;
+	out->current_rank = i40_load(&raw.currentRank);
+	out->next_rank = i40_load(&raw.nextRank);
+	if (raw.count != COUNT_ESCAPE) {
+		out->count = raw.count;
+	} else {
+		RunRecord ov;
+		if (get_next_input_element(manager, chunk_id, &ov) != SUCCESS) {
+			printf("merge: missing overflow record after count escape in chunk %d\n", chunk_id);
+			return FAILURE;
+		}
+		out->count = (int) i40_load(&ov.currentRank);
 	}
 	return SUCCESS;
 }

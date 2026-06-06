@@ -34,7 +34,7 @@ typedef struct merge_manager {
 	FILE **input_fps;                      //one open file pointer per chunk for sequential run reads
 
 	//Each chunk's buffer is shared for input and output: input RunRecords are read
-	//from the front; resolved output GlobalRecords (smaller, 9B vs 14B) are written
+	//from the front; resolved output GlobalRecords (smaller, 6B vs 11B) are written
 	//back into the front over slots already copied into the heap. See merge.c.
 	RunRecord **input_buffers; //array of buffers to hold part of each run (also holds output)
 	int *input_buffer_positions; //position in current input buffer, if no need to refill  - -1
@@ -59,8 +59,9 @@ int refill_buffer (Manager * manager, int chunk_id);
 void heap_to_output_last ( Manager *manager, HeapElement *current, OutputElement *result);
 void heap_to_output ( Manager *manager, HeapElement *current, OutputElement *result);
 int get_next_input_element (Manager * manager, int chunk_id, RunRecord *result);
-int insert_into_heap (Manager * manager, int chunk_id, RunRecord *input);
-void replace_top_heap_element (Manager * manager, int chunk_id, RunRecord *input);
+int get_next_run (Manager * manager, int chunk_id, HeapElement *out);
+int insert_into_heap (Manager * manager, HeapElement *input);
+void replace_top_heap_element (Manager * manager, HeapElement *input);
 void pop_top_heap_element (Manager * manager);
 int init_merge (Manager * manager);
 int merge_runs (Manager * manager);
