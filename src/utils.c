@@ -64,6 +64,19 @@ long parse_chunk_size (const char *arg) {
 	return value;
 }
 
+// Parse a merge RAM-budget CLI argument (plain bytes). Must be a positive
+// integer. Unlike chunk size, this is a byte count that routinely exceeds INT_MAX
+// (e.g. an 8 GiB budget), so it is parsed as a full long with no INT_MAX clamp.
+long parse_mem_bytes (const char *arg) {
+	char *end = NULL;
+	long value = strtol(arg, &end, 10);
+	if (end == arg || *end != '\0' || value <= 0) {
+		fprintf(stderr, "Invalid mem_bytes \"%s\": must be a positive integer\n", arg);
+		exit(1);
+	}
+	return value;
+}
+
 void OpenBinaryFileRead (FILE ** fp, char * file_name) {
 	if(!(*fp= fopen ( file_name, "rb" )))  {
 		report_open_failure("input binary file for reading", file_name);

@@ -88,5 +88,6 @@ void Fwrite (const void *buffer, size_t elem_size, size_t num_elements, FILE *fp
 void * Calloc (size_t num_bytes);
 void tsort(int *sa, long *next_ranks, int n);
 long parse_chunk_size (const char *arg);
+long parse_mem_bytes (const char *arg);
 
 #endif

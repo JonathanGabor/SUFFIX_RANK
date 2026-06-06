@@ -12,6 +12,7 @@
 
 extern "C" {
 #include "utils.h"
+#include "algorithm.h"
 }
 
 #include <divsufsort.h>
@@ -54,6 +55,10 @@ static void ranks_path(char *out, size_t cap, const char *dir, int id) {
 
 static void sa_path(char *out, size_t cap, const char *dir, int id) {
 	snprintf(out, cap, "%s/sa_%d", dir, id);
+}
+
+static void currents_path(char *out, size_t cap, const char *dir, int id) {
+	snprintf(out, cap, "%s/currents_%d", dir, id);
 }
 
 static void read_all(const char *path, uint8_t *buf, long n) {
@@ -390,6 +395,12 @@ static int run_pass_3(const char *rank_directory,
 	uint8_t *X = (uint8_t *) Calloc((size_t) working_chunk_size * sizeof(uint8_t));
 	uint8_t *A = (uint8_t *) Calloc((size_t) working_chunk_size * sizeof(uint8_t));
 	int    *sa = (int *)    Calloc((size_t) working_chunk_size * sizeof(int));
+	// For the currents_<id> stream: this chunk's ranks (position order) read back
+	// to RLE the current ranks in SA order, plus the RankRun output buffer.
+	int40   *ranks_buf    = (int40 *)   Calloc((size_t) working_chunk_size * sizeof(int40));
+	int      currents_cap = (int) (working_chunk_size / 3);
+	if (currents_cap < 2) currents_cap = 2;
+	RankRun *currents_buf = (RankRun *) Calloc((size_t) currents_cap * sizeof(RankRun));
 
 	char path[MAX_PATH_LENGTH];
 
@@ -444,7 +455,7 @@ static int run_pass_3(const char *rank_directory,
 			fprintf(stderr,
 			        "init: chunk size %ld exceeds 32-bit divsufsort limit\n",
 			        n_X);
-			free(X); free(A); free(sa);
+			free(X); free(A); free(sa); free(ranks_buf); free(currents_buf);
 			return FAILURE;
 		}
 		divsufsort((const unsigned char *) X, sa, (int32_t) n_X);
@@ -454,6 +465,50 @@ static int run_pass_3(const char *rank_directory,
 		OpenBinaryFileWrite(&sa_fp, path);
 		Fwrite(sa, sizeof(int), (size_t) n_X, sa_fp);
 		fclose(sa_fp);
+
+		// Seed currents_<id>: the (current_rank, count) RLE of this chunk's ranks
+		// in SA order, the stream merge reads for iteration 0 (update rewrites it
+		// thereafter). pass C already wrote ranks_<id> (position order); read it
+		// back and run-length-encode rank[sa[j]] over the just-computed local SA.
+		ranks_path(path, sizeof path, rank_directory, chunk_id);
+		FILE *ranks_fp = NULL;
+		OpenBinaryFileRead(&ranks_fp, path);
+		if ((long) fread(ranks_buf, sizeof(int40), (size_t) n_X, ranks_fp) != n_X) {
+			fprintf(stderr, "init: short read on %s while building currents\n", path);
+			fclose(ranks_fp);
+			free(X); free(A); free(sa); free(ranks_buf); free(currents_buf);
+			return FAILURE;
+		}
+		fclose(ranks_fp);
+
+		currents_path(path, sizeof path, rank_directory, chunk_id);
+		FILE *currents_fp = NULL;
+		OpenBinaryFileWrite(&currents_fp, path);
+		int cur_out = 0;
+		int64_t run_rank = i40_load(&ranks_buf[sa[0]]);
+		long run_count = 1;
+		for (long j = 1; j < n_X; j++) {
+			int64_t r = i40_load(&ranks_buf[sa[j]]);
+			if (r == run_rank) {
+				run_count++;
+			} else {
+				if (cur_out + 2 > currents_cap) {
+					Fwrite(currents_buf, sizeof(RankRun), (size_t) cur_out, currents_fp);
+					cur_out = 0;
+				}
+				rankrun_emit(currents_buf, &cur_out, run_rank, run_count);
+				run_rank = r;
+				run_count = 1;
+			}
+		}
+		if (cur_out + 2 > currents_cap) {
+			Fwrite(currents_buf, sizeof(RankRun), (size_t) cur_out, currents_fp);
+			cur_out = 0;
+		}
+		rankrun_emit(currents_buf, &cur_out, run_rank, run_count);
+		if (cur_out > 0)
+			Fwrite(currents_buf, sizeof(RankRun), (size_t) cur_out, currents_fp);
+		fclose(currents_fp);
 	}
 
 	// Clean up the leftovers for chunk 0 (its X and gt_head are never consumed).
@@ -465,6 +520,8 @@ static int run_pass_3(const char *rank_directory,
 	free(X);
 	free(A);
 	free(sa);
+	free(ranks_buf);
+	free(currents_buf);
 	(void) last_chunk_size; // unused; sizes come from fstat per chunk
 	return SUCCESS;
 }

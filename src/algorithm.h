@@ -54,15 +54,47 @@ typedef struct run_triple {
 } RunRecord;
 
 // One per chunk-local run, written by merge to global_<chunk> in run order
-// (1:1 with refine's runs_<chunk>, modulo overflow records). Carries the
-// resolved global rank plus the run's local count, so update can apply ranks by
-// walking the local SA count-by-count without re-reading next-ranks. count is a
-// chunk-local run length stored as a single byte with the same COUNT_ESCAPE +
-// overflow-record encoding as RunRecord, so the struct is 6 bytes.
+// (1:1 with the triplet stream merge reconstructs). Carries the resolved global
+// rank plus the run's local count, so update can apply ranks by walking the
+// local SA count-by-count without re-reading next-ranks. count is a chunk-local
+// run length stored as a single byte with the same COUNT_ESCAPE + overflow-record
+// encoding as RunRecord, so the struct is 6 bytes.
 typedef struct global_record {
 	int40 rank;
 	uint8_t count;
 } GlobalRecord;
+
+// A (rank, count) run record, 6 bytes -- bit-identical layout to GlobalRecord.
+// This is the shared on-disk format for the three streams the refactored
+// pipeline passes around:
+//   * currents_<id> -- (current_rank, count) runs over the local SA, written by
+//     init (iteration 0) and update (iteration >=1), consumed by merge.
+//   * nexts_<id>    -- (next_rank, count) runs over the local SA, written by
+//     refine, consumed by merge (and reused as merge's in-place output buffer).
+//   * merge's output (== next iteration's currents/global) -- (updated_rank, count).
+// count uses the same COUNT_ESCAPE + overflow-record encoding as RunRecord/
+// GlobalRecord (the overflow record's rank field carries the true count).
+typedef struct rank_run {
+	int40 rank;
+	uint8_t count;
+} RankRun;
+
+// Append a (rank, count) run to buf as one or two RankRuns, advancing *pos.
+// Large counts escape: a record with count==COUNT_ESCAPE is followed by an
+// overflow record carrying the true count in its rank field. Caller must
+// guarantee room for 2 records before calling (reserve the escape pair).
+static inline void rankrun_emit(RankRun *buf, int *pos, int64_t rank, long count) {
+	RankRun *r = &buf[(*pos)++];
+	i40_store(&r->rank, rank);
+	if (count < COUNT_ESCAPE) {
+		r->count = (uint8_t) count;
+	} else {
+		r->count = COUNT_ESCAPE;
+		RankRun *ov = &buf[(*pos)++];
+		i40_store(&ov->rank, (int64_t) count);
+		ov->count = 0;
+	}
+}
 
 // (position, final-rank) pair routed by rank bucket in create_pairs and
 // consumed by invert. Both fields are < 2^39 (positions/ranks of a single
@@ -82,6 +114,7 @@ int resolve_global_ranks (char *temp_dir );
 int update_local_ranks (char * rank_dir, char * temp_dir, int total_chunks, int chunk_id, long prefix_len,
                         long working_chunk_size,
                         int40 * buffer_current,
-                        int * sa_buffer, GlobalRecord * global_buf);
+                        int * sa_buffer, GlobalRecord * global_buf,
+                        RankRun * currents_buf, int currents_capacity);
 
 #endif

@@ -4,7 +4,8 @@
 
 int update_local_ranks (char * rank_dir, char * temp_dir, int total_chunks, int chunk_id, long prefix_len,
                         long working_chunk_size,
-                        int40 * buffer_current, int * sa_buffer, GlobalRecord * global_buf){
+                        int40 * buffer_current, int * sa_buffer, GlobalRecord * global_buf,
+                        RankRun * currents_buf, int currents_capacity){
 	// Same EMPTY predicate refine uses, so the two agree on which chunks have runs.
 	NextRankLoc loc = next_rank_loc(prefix_len, working_chunk_size, chunk_id, total_chunks);
 	if (loc.is_empty) return EMPTY;
@@ -14,6 +15,7 @@ int update_local_ranks (char * rank_dir, char * temp_dir, int total_chunks, int 
 	FILE * global_resolved_FP = NULL;
 	FILE * current_FP = NULL;
 	FILE * saFP = NULL;
+	FILE * currents_FP = NULL;
 
 	int result, total_resolved, total_ranks, sa_length, m, q;
 
@@ -47,6 +49,13 @@ int update_local_ranks (char * rank_dir, char * temp_dir, int total_chunks, int 
 	}
 	fclose (global_resolved_FP);
 
+	// The surviving (count != 0) runs, in this same SA order, are exactly the
+	// next iteration's currents stream: each is a distinct new-rank group of
+	// size >= 2 over the compacted SA. Re-emit them as RankRuns to currents_<id>.
+	snprintf(file_name, sizeof file_name, "%s/currents_%d", rank_dir, chunk_id);
+	OpenBinaryFileWrite(&currents_FP, file_name);
+	int cur_out = 0;
+
 	// Apply each group's rank to the next <count> SA entries in order. A run
 	// resolved this round is signaled by count==0 (it is always a global
 	// singleton, so it covers exactly one SA entry); its rank is still stored
@@ -77,6 +86,12 @@ int update_local_ranks (char * rank_dir, char * temp_dir, int total_chunks, int 
 				}
 				m++;
 			}
+			// Survivor: carry it into the next iteration's currents stream.
+			if (cur_out + 2 > currents_capacity) {
+				Fwrite(currents_buf, sizeof(RankRun), (size_t) cur_out, currents_FP);
+				cur_out = 0;
+			}
+			rankrun_emit(currents_buf, &cur_out, rank, cnt);
 		}
 	}
 	if (m != sa_length) {
@@ -92,8 +107,12 @@ int update_local_ranks (char * rank_dir, char * temp_dir, int total_chunks, int 
 	OpenBinaryFileWrite (&saFP, file_name);
 	Fwrite (sa_buffer, sizeof(int), sa_length-displacement, saFP);
 
+	if (cur_out > 0)
+		Fwrite(currents_buf, sizeof(RankRun), (size_t) cur_out, currents_FP);
+
 	fclose (current_FP);
 	fclose (saFP);
+	fclose (currents_FP);
 
 	return SUCCESS;
 }
@@ -127,11 +146,19 @@ int main (int argc, char **argv){
 	                           + (size_t)working_chunk_size / COUNT_ESCAPE + 2;
 	GlobalRecord * global_buf = (GlobalRecord *) Calloc (global_buf_capacity * sizeof(GlobalRecord));
 
+	// Streaming output buffer for the next iteration's currents_<id> stream
+	// (RankRuns). It is flushed whenever the next run + its escape pair would not
+	// fit, so a fraction of a chunk is plenty.
+	int currents_capacity = (int) (working_chunk_size / 3);
+	if (currents_capacity < 2) currents_capacity = 2;
+	RankRun * currents_buf = (RankRun *) Calloc ((size_t) currents_capacity * sizeof(RankRun));
+
 	int more_runs = EMPTY;
     for (chunk_id=0; chunk_id<total_chunks; chunk_id++) {
   	   int result = update_local_ranks (rank_dir, temp_dir, total_chunks, chunk_id, prefix_len,
   	                                    working_chunk_size,
-  	                                    buffer_current, sa_buffer, global_buf);
+  	                                    buffer_current, sa_buffer, global_buf,
+  	                                    currents_buf, currents_capacity);
        if (result == FAILURE){
          return FAILURE;
        }
@@ -141,6 +168,7 @@ int main (int argc, char **argv){
     }
 
 	free (global_buf);
+	free (currents_buf);
 	free (buffer_current);
 	free (sa_buffer);
 

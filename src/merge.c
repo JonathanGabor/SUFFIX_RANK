@@ -1,44 +1,46 @@
 #include "merge.h"
 
-//Output GlobalRecords (6B) are overlaid onto the shared per-chunk input buffer
-//(RunRecords, 11B), written at the front over slots already copied into the heap.
-//int40 is alignment-1 so the unaligned overlay is well defined.
+// merge reconstructs the (curr,next,count) triplet stream the heap consumes from
+// TWO per-chunk RankRun streams: currents_<id> (current-rank runs) and nexts_<id>
+// (next-rank runs), which are two run-length encodings of the same local SA. The
+// joint walk (next_triplet) emits min(cur_rem,next_rem) at each step, re-splitting
+// a nexts run that straddles a current-rank boundary. So #triplets >= #nexts runs.
 //
-//The output cursor must never overrun into input not yet read into the heap, i.e.
-//the write must satisfy (pos+1)*6 <= 11*input_position (whole buffer is free once
-//the run is exhausted, input_position == -1). Steady state keeps the cursors in
-//lockstep with the input read leading, but across a refill the reset output
-//cursor can momentarily carry up to two pending resolutions while only one new
-//input slot is free. We guard each write: if it would overrun, flush the
-//accumulated output first and restart the cursor (the just-freed front always
-//holds at least one record, so pos 0 is then safe). This self-corrects the
-//boundary; in steady state the guard never fires.
-static inline void put_global(Manager *manager, int chunk_id, int64_t rank_field, uint8_t count_byte) {
-	int pos = manager->output_buffer_positions[chunk_id];
-	int p = manager->input_buffer_positions[chunk_id];
-	long avail = (p == -1) ? (long)manager->input_buffer_capacity * (long)sizeof(RunRecord)
-	                       : (long)p * (long)sizeof(RunRecord);
-	if ((long)(pos + 1) * (long)sizeof(GlobalRecord) > avail) {
-		flush_output_buffers(manager, chunk_id);
-		pos = 0;
-		manager->output_buffer_positions[chunk_id] = 0;
+// Output: resolved (updated_rank, count) RankRuns (same 6B size as a nexts record)
+// are overlaid onto the front of the nexts buffer, over slots already read. Splits
+// mean output can outrun the nexts records consumed; the guard below flushes the
+// accumulated output to global_<id> and resets the write cursor to 0 whenever a
+// write would reach the unread-nexts frontier. The just-consumed front (slots
+// [0, nexts_pos)) is always free, and output is produced in SA order, so the
+// flushed prefix and the records written after it stay correctly ordered on disk.
+// No separate output buffer and no memmove are needed; the nexts buffer is sized
+// ~2x the currents buffer so the guard fires rarely.
+static inline void put_current(Manager *manager, int chunk_id, int64_t rank_field, uint8_t count_byte) {
+	int wpos = manager->out_pos[chunk_id];
+	int rp   = manager->nexts_pos[chunk_id];
+	// Free (already-consumed) record slots at the front: the whole buffer once the
+	// nexts stream is drained (rp == -1), otherwise the rp records read so far.
+	long avail = (rp == -1) ? (long)manager->nexts_capacity : (long)rp;
+	if ((long)(wpos + 1) > avail) {
+		flush_output(manager, chunk_id);
+		wpos = 0;
+		manager->out_pos[chunk_id] = 0;
 	}
-	GlobalRecord *gr = (GlobalRecord *)((char *)manager->input_buffers[chunk_id]
-			+ (size_t)pos * sizeof(GlobalRecord));
-	i40_store(&gr->rank, rank_field);
-	gr->count = count_byte;
-	manager->output_buffer_positions[chunk_id] = pos + 1;
+	RankRun *o = &manager->nexts_buffers[chunk_id][wpos];
+	i40_store(&o->rank, rank_field);
+	o->count = count_byte;
+	manager->out_pos[chunk_id] = wpos + 1;
 }
 
-//Encode count as a byte, escaping large counts with an overflow record (the true
-//count goes in the overflow record's rank field). Each record is written through
-//the guarded put_global, so the overlay invariant holds even for the pair.
+// Encode count as a byte, escaping large counts with an overflow record (true
+// count in the overflow record's rank field). Each record goes through the
+// guarded put_current, so the overlay invariant holds even for the pair.
 static inline void write_output(Manager *manager, int chunk_id, int64_t rank, int count) {
 	if (count < COUNT_ESCAPE) {
-		put_global(manager, chunk_id, rank, (uint8_t) count);
+		put_current(manager, chunk_id, rank, (uint8_t) count);
 	} else {
-		put_global(manager, chunk_id, rank, COUNT_ESCAPE);
-		put_global(manager, chunk_id, (int64_t) count, 0);
+		put_current(manager, chunk_id, rank, COUNT_ESCAPE);
+		put_current(manager, chunk_id, (int64_t) count, 0);
 	}
 }
 
@@ -58,7 +60,7 @@ int merge_runs (Manager * manager){
 	OutputElement output_result;
 	int chunk_id;
 	HeapElement smallest;
-	HeapElement next;       //decoded next run from the popped chunk
+	HeapElement next;       //decoded next triplet from the popped chunk
 	//1. go in the loop through all input files and fill-in initial buffers
 	if (init_merge (manager)!=SUCCESS)
 		return FAILURE;
@@ -80,7 +82,7 @@ int merge_runs (Manager * manager){
 			return FAILURE;
 
 		//Fuse the pop+push into a single sift-down: if the popped chunk has a
-		//next record, replace the root with it and sift down once; otherwise
+		//next triplet, replace the root with it and sift down once; otherwise
 		//pop the root (shrink heap) and sift the former-last element down.
 		if(result==SUCCESS)        //next element exists
 			replace_top_heap_element (manager, &next);
@@ -90,7 +92,7 @@ int merge_runs (Manager * manager){
 		heap_to_output (manager, &smallest, &output_result);
 
 		if (output_result.chunk_id >= 0) {          //app-specific
-			//overlay the resolved record onto the shared buffer (see write_output)
+			//overlay the resolved record onto the nexts buffer (see write_output)
 			write_output(manager, output_result.chunk_id, output_result.new_rank, output_result.count);
 		}
 
@@ -101,11 +103,9 @@ int merge_runs (Manager * manager){
 		manager->last_transferred = smallest;
 	}
 
-	//flush what remains in output buffer
+	//flush what remains in each chunk's output overlay
 	for (chunk_id=0; chunk_id < manager->total_chunks; chunk_id++) {
-		//if(manager->output_buffer_positions[chunk_id] > 0) {
-			flush_output_buffers(manager, chunk_id);
-		//}
+		flush_output(manager, chunk_id);
 	}
 
 	if (DEBUG) printf("Merge complete.\n");
@@ -118,16 +118,14 @@ int init_merge (Manager * manager) {
 	HeapElement first;
 
 	for(i=0;i<manager->total_chunks;i++) {
-		if (refill_buffer(manager,i) == FAILURE){
-			fprintf(stderr, "Failed to fill initial buffer %d\n",i);
-			return FAILURE;
-		}
+		refill_nexts(manager,i);
+		refill_currents(manager,i);
 	}
 
 	for (i=0;i<manager->total_chunks;i++) {
-		//get element from each buffer
+		//get the first triplet from each chunk (joint walk of its two streams)
 		ret = get_next_run (manager,i, &first);
-		if (ret==FAILURE) //at least 1 element should exist
+		if (ret==FAILURE) //corruption (e.g. currents drained while nexts remain)
 			return FAILURE;
 
 		//insert it into heap
@@ -219,46 +217,101 @@ int insert_into_heap (Manager * manager, HeapElement *input){
 	return SUCCESS;
 }
 
-int get_next_input_element (Manager * manager, int chunk_id, RunRecord *result){
+// Read one physical RankRun from a chunk's stream (NEXTS or CURRENTS), refilling
+// the buffer from disk as needed. Returns SUCCESS / EMPTY (stream drained).
+static int get_phys_rankrun (Manager * manager, int chunk_id, int which, RankRun *out){
+	int pos = (which == STREAM_NEXTS) ? manager->nexts_pos[chunk_id]
+	                                  : manager->cur_pos[chunk_id];
+	if (pos == -1) return EMPTY;          //stream fully drained
 
-	if(manager->input_buffer_positions[chunk_id] == -1) //run is complete
-		return EMPTY;
+	int len = (which == STREAM_NEXTS) ? manager->nexts_len[chunk_id]
+	                                  : manager->cur_len[chunk_id];
+	if (pos < len) {
+		if (which == STREAM_NEXTS) {
+			*out = manager->nexts_buffers[chunk_id][pos];
+			manager->nexts_pos[chunk_id] = pos + 1;
+		} else {
+			*out = manager->cur_buffers[chunk_id][pos];
+			manager->cur_pos[chunk_id] = pos + 1;
+		}
+		return SUCCESS;
+	}
 
-	//there are still elements in the buffer
-	if(manager->input_buffer_positions[chunk_id] < manager->input_buffer_lengths[chunk_id])
-		*result = manager->input_buffers[chunk_id][manager->input_buffer_positions[chunk_id]++];
-	else {
-		int refill_result = refill_buffer (manager, chunk_id);
-		if(refill_result==SUCCESS)
-			return get_next_input_element (manager,  chunk_id, result);
-		else
-			return refill_result;
+	int rr = (which == STREAM_NEXTS) ? refill_nexts(manager, chunk_id)
+	                                 : refill_currents(manager, chunk_id);
+	if (rr == SUCCESS)
+		return get_phys_rankrun(manager, chunk_id, which, out);
+	return rr;   //EMPTY
+}
+
+// Decode one logical (rank, count) run from a chunk's stream, resolving the
+// byte-count escape: a record with count==COUNT_ESCAPE is followed by an
+// overflow record whose rank field holds the true count. Records may straddle a
+// buffer boundary; get_phys_rankrun refills as needed.
+static int decode_rankrun (Manager * manager, int chunk_id, int which,
+                           int64_t *rank, long *count){
+	RankRun raw;
+	int r = get_phys_rankrun(manager, chunk_id, which, &raw);
+	if (r != SUCCESS) return r;   //EMPTY
+
+	*rank = i40_load(&raw.rank);
+	if (raw.count != COUNT_ESCAPE) {
+		*count = raw.count;
+	} else {
+		RankRun ov;
+		if (get_phys_rankrun(manager, chunk_id, which, &ov) != SUCCESS) {
+			printf("merge: missing overflow record after count escape in chunk %d\n", chunk_id);
+			return FAILURE;
+		}
+		*count = i40_load(&ov.rank);
 	}
 	return SUCCESS;
 }
 
-//Read one logical run from a chunk into a decoded HeapElement, resolving the
-//byte-count escape: a record with count==COUNT_ESCAPE is followed by an overflow
-//record whose currentRank field holds the true count. The escape and overflow
-//records may straddle a buffer boundary; get_next_input_element refills as needed.
-int get_next_run (Manager * manager, int chunk_id, HeapElement *out){
-	RunRecord raw;
-	int r = get_next_input_element(manager, chunk_id, &raw);
-	if (r != SUCCESS) return r;   //EMPTY or FAILURE
-
-	out->chunk_id = chunk_id;
-	out->current_rank = i40_load(&raw.currentRank);
-	out->next_rank = i40_load(&raw.nextRank);
-	if (raw.count != COUNT_ESCAPE) {
-		out->count = raw.count;
-	} else {
-		RunRecord ov;
-		if (get_next_input_element(manager, chunk_id, &ov) != SUCCESS) {
-			printf("merge: missing overflow record after count escape in chunk %d\n", chunk_id);
+// Joint walk: yield one (curr, next, count) triplet, count = overlap of the
+// current currents-run and nexts-run. Advances whichever run(s) the overlap
+// exhausts. Decodes the NEXTS run first so an empty chunk (resolved this round:
+// no nexts records) returns EMPTY without ever touching its currents stream.
+int next_triplet (Manager * manager, int chunk_id, TripletCursor *t,
+                  int64_t *curr, int64_t *next, long *count){
+	if (t->next_rem == 0) {
+		long cnt; int64_t rk;
+		int r = decode_rankrun(manager, chunk_id, STREAM_NEXTS, &rk, &cnt);
+		if (r != SUCCESS) return r;       //EMPTY (chunk done) or FAILURE
+		t->next_rank = rk;
+		t->next_rem  = cnt;
+	}
+	if (t->cur_rem == 0) {
+		long cnt; int64_t rk;
+		int r = decode_rankrun(manager, chunk_id, STREAM_CURRENTS, &rk, &cnt);
+		if (r == EMPTY) {
+			//currents drained while nexts still has records: streams disagree
+			printf("merge: currents stream shorter than nexts in chunk %d\n", chunk_id);
 			return FAILURE;
 		}
-		out->count = (int) i40_load(&ov.currentRank);
+		if (r != SUCCESS) return FAILURE;
+		t->cur_rank = rk;
+		t->cur_rem  = cnt;
 	}
+
+	long take = (t->cur_rem < t->next_rem) ? t->cur_rem : t->next_rem;
+	*curr  = t->cur_rank;
+	*next  = t->next_rank;
+	*count = take;
+	t->cur_rem  -= take;
+	t->next_rem -= take;
+	return SUCCESS;
+}
+
+// Produce the next (curr,next,count) triplet for a chunk as a HeapElement.
+int get_next_run (Manager * manager, int chunk_id, HeapElement *out){
+	int64_t c, n; long cnt;
+	int r = next_triplet(manager, chunk_id, &manager->cursors[chunk_id], &c, &n, &cnt);
+	if (r != SUCCESS) return r;   //EMPTY or FAILURE
+	out->chunk_id = chunk_id;
+	out->current_rank = c;
+	out->next_rank = n;
+	out->count = (int) cnt;       //count <= chunk_size <= 2^31, fits int
 	return SUCCESS;
 }
 
@@ -326,140 +379,169 @@ void heap_to_output_last ( Manager *manager, HeapElement *current, OutputElement
 }
 
 
-int refill_buffer (Manager * manager, int chunk_id) {
-
+// Refill a chunk's nexts buffer. Because the nexts buffer doubles as the output
+// overlay, flush any accumulated output (all input here is already consumed)
+// before overwriting it, then restart the output cursor. Sequential reads: the
+// file pointer is left where the previous read ended, so no fseek is needed.
+int refill_nexts (Manager * manager, int chunk_id) {
 	int result;
 
-	if(manager->input_file_positions[chunk_id] == -1) {
-		manager->input_buffer_positions[chunk_id] = -1; //signifies no more elements
-		return EMPTY; //run is complete - no more elements in the input file
+	if(manager->nexts_filepos[chunk_id] == -1) {
+		manager->nexts_pos[chunk_id] = -1; //no more elements ever
+		return EMPTY;
 	}
 
-	//the input buffer is shared with output: before fread overwrites it, flush the
-	//output records accumulated in the front (all input here is already consumed),
-	//then restart the output cursor. Any outputs lagging past this window boundary
-	//get written into the fresh buffer and flushed at the next refill/final flush.
-	if (manager->output_buffer_positions[chunk_id] > 0) {
-		flush_output_buffers(manager, chunk_id);
-		manager->output_buffer_positions[chunk_id] = 0;
+	if (manager->out_pos[chunk_id] > 0) {
+		flush_output(manager, chunk_id);
+		manager->out_pos[chunk_id] = 0;
 	}
 
-	//the file pointer is left exactly where the previous read ended, so reads
-	//are sequential and no fseek is required
-	if ((result = fread (manager->input_buffers[chunk_id],
-			sizeof (RunRecord), manager->input_buffer_capacity, manager->input_fps[chunk_id])) > 0) {
-		manager->input_buffer_positions[chunk_id] = 0;
-		manager->input_buffer_lengths [chunk_id] = result;
-		manager->input_file_positions [chunk_id] += result;
+	if ((result = fread (manager->nexts_buffers[chunk_id],
+			sizeof (RankRun), manager->nexts_capacity, manager->nexts_fps[chunk_id])) > 0) {
+		manager->nexts_pos[chunk_id] = 0;
+		manager->nexts_len [chunk_id] = result;
+		manager->nexts_filepos [chunk_id] += result;
 
-		if (result < manager->input_buffer_capacity) //no more reads
-			manager->input_file_positions [chunk_id] = -1;
+		if (result < manager->nexts_capacity) //read hit EOF
+			manager->nexts_filepos [chunk_id] = -1;
 		return SUCCESS;
 	}
-	//no more elements - we read exactly until the end of the file in the previous upload
-	manager->input_file_positions [chunk_id] = -1;
-	manager->input_buffer_positions[chunk_id] = -1;
-
+	manager->nexts_filepos [chunk_id] = -1;
+	manager->nexts_pos[chunk_id] = -1;
 	return EMPTY;
 }
 
-void flush_output_buffers (Manager *manager, int chunk_id) {
-	//output lives in the front of the shared input buffer; writes are sequential
-	//so no reopen/fseek is needed between flushes.
-	Fwrite (manager->input_buffers[chunk_id], sizeof (GlobalRecord), manager->output_buffer_positions[chunk_id], manager->output_fps[chunk_id]);
+// Refill a chunk's currents buffer (read-only stream, no output coupling).
+int refill_currents (Manager * manager, int chunk_id) {
+	int result;
+
+	if(manager->cur_filepos[chunk_id] == -1) {
+		manager->cur_pos[chunk_id] = -1;
+		return EMPTY;
+	}
+
+	if ((result = fread (manager->cur_buffers[chunk_id],
+			sizeof (RankRun), manager->cur_capacity, manager->cur_fps[chunk_id])) > 0) {
+		manager->cur_pos[chunk_id] = 0;
+		manager->cur_len [chunk_id] = result;
+		manager->cur_filepos [chunk_id] += result;
+
+		if (result < manager->cur_capacity)
+			manager->cur_filepos [chunk_id] = -1;
+		return SUCCESS;
+	}
+	manager->cur_filepos [chunk_id] = -1;
+	manager->cur_pos[chunk_id] = -1;
+	return EMPTY;
+}
+
+void flush_output (Manager *manager, int chunk_id) {
+	//output lives in the front of the nexts buffer; writes are sequential so no
+	//reopen/fseek is needed between flushes.
+	if (manager->out_pos[chunk_id] > 0)
+		Fwrite (manager->nexts_buffers[chunk_id], sizeof (RankRun),
+		        manager->out_pos[chunk_id], manager->out_fps[chunk_id]);
 }
 
 void clean_up(Manager * manager){
 	int i;
-	for (i=0; i<manager->total_chunks;i++)
-		free(manager->input_buffers [i]);
-	free(manager->input_buffers);
+	for (i=0; i<manager->total_chunks;i++) {
+		free(manager->nexts_buffers[i]);
+		free(manager->cur_buffers[i]);
+	}
+	free(manager->nexts_buffers);
+	free(manager->cur_buffers);
 
-	for (i=0; i<manager->total_chunks;i++)
-		if (manager->input_fps[i]) fclose(manager->input_fps[i]);
-	free(manager->input_fps);
+	for (i=0; i<manager->total_chunks;i++) {
+		if (manager->nexts_fps[i]) fclose(manager->nexts_fps[i]);
+		if (manager->cur_fps[i])   fclose(manager->cur_fps[i]);
+		if (manager->out_fps[i])   fclose(manager->out_fps[i]);
+	}
+	free(manager->nexts_fps);
+	free(manager->cur_fps);
+	free(manager->out_fps);
 
-	free(manager->input_file_positions);
-	free(manager->input_buffer_positions);
-	free(manager->input_buffer_lengths);
-	free(manager->output_buffer_positions);
-	for (i=0; i<manager->total_chunks;i++)
-		if (manager->output_fps[i]) fclose(manager->output_fps[i]);
-	free(manager->output_fps);
+	free(manager->nexts_pos);
+	free(manager->nexts_len);
+	free(manager->nexts_filepos);
+	free(manager->out_pos);
+	free(manager->cur_pos);
+	free(manager->cur_len);
+	free(manager->cur_filepos);
+	free(manager->cursors);
 	free(manager->heap);
 }
 
 void setup(Manager * manager){
 	int i;
 
+	// Total merge RAM is the mem_bytes budget, split across chunks as (1 currents +
+	// 2 nexts) RankRun units each: the currents buffer (read-only) and the nexts
+	// buffer (read + in-place output overlay), the latter sized ~2x for split
+	// headroom. Solve cur_capacity from that; nexts_capacity = 2x.
+	manager->cur_capacity = (int)(manager->mem_bytes
+	                              / ((long)sizeof(RankRun) * 3 * manager->total_chunks));
+	if (manager->cur_capacity < 1) manager->cur_capacity = 1;
+	manager->nexts_capacity = 2 * manager->cur_capacity;
 
-	long mem_budget = MERGE_BUFFER_FACTOR * manager->working_chunk_size;
+	manager->nexts_buffers   = (RankRun **) Calloc (manager->total_chunks * sizeof (RankRun *));
+	manager->cur_buffers     = (RankRun **) Calloc (manager->total_chunks * sizeof (RankRun *));
+	manager->nexts_fps       = (FILE **) Calloc (manager->total_chunks * sizeof(FILE *));
+	manager->cur_fps         = (FILE **) Calloc (manager->total_chunks * sizeof(FILE *));
+	manager->out_fps         = (FILE **) Calloc (manager->total_chunks * sizeof(FILE *));
+	manager->nexts_pos       = (int *) Calloc (manager->total_chunks * sizeof(int));
+	manager->nexts_len       = (int *) Calloc (manager->total_chunks * sizeof(int));
+	manager->nexts_filepos   = (int *) Calloc (manager->total_chunks * sizeof(int));
+	manager->out_pos         = (int *) Calloc (manager->total_chunks * sizeof(int));
+	manager->cur_pos         = (int *) Calloc (manager->total_chunks * sizeof(int));
+	manager->cur_len         = (int *) Calloc (manager->total_chunks * sizeof(int));
+	manager->cur_filepos     = (int *) Calloc (manager->total_chunks * sizeof(int));
+	manager->cursors         = (TripletCursor *) Calloc (manager->total_chunks * sizeof(TripletCursor));
 
-	manager->input_file_positions  = (int *) Calloc (manager->total_chunks * sizeof(int));
-	//allocate the per-chunk shared input/output buffers. Input and output share
-	//one buffer, so the full 2*mem_budget goes to input capacity (2x the old
-	//input-only size) while total merge RAM stays the same as the previous
-	//separate input+output buffers.
-	manager->input_buffers = (RunRecord **) Calloc (manager->total_chunks * sizeof (RunRecord *));
-	manager->input_buffer_capacity = (2 * mem_budget) / (sizeof(RunRecord)*(manager->total_chunks));
-	if (manager->input_buffer_capacity < 1) manager->input_buffer_capacity = 1;
-	for (i=0; i<manager->total_chunks;i++)
-		manager->input_buffers [i] = (RunRecord *) Calloc ((size_t)manager->input_buffer_capacity *sizeof(RunRecord));
-
-	//open one persistent file pointer per chunk; reads are sequential so we never
-	//need to reopen or fseek during refills
-	manager->input_fps = (FILE **) Calloc (manager->total_chunks * sizeof(FILE *));
 	for (i=0; i<manager->total_chunks;i++) {
 		char file_name[MAX_PATH_LENGTH];
-		snprintf(file_name, sizeof(file_name), "%s/runs_%d", manager->input_dir, i);
-		OpenBinaryFileRead(&(manager->input_fps[i]), file_name);
+
+		manager->nexts_buffers[i] = (RankRun *) Calloc ((size_t)manager->nexts_capacity * sizeof(RankRun));
+		manager->cur_buffers[i]   = (RankRun *) Calloc ((size_t)manager->cur_capacity * sizeof(RankRun));
+
+		// Cursors start "buffer empty" (pos==len==0, filepos==0) so the first
+		// refill in init_merge loads from disk; cursors zero-initialized by Calloc.
+		snprintf(file_name, sizeof(file_name), "%s/nexts_%d", manager->nexts_dir, i);
+		OpenBinaryFileRead(&(manager->nexts_fps[i]), file_name);
+
+		snprintf(file_name, sizeof(file_name), "%s/currents_%d", manager->currents_dir, i);
+		OpenBinaryFileRead(&(manager->cur_fps[i]), file_name);
+
+		//global_* files start empty each merge invocation (tmp is cleared upstream)
+		snprintf(file_name, sizeof(file_name), "%s/global_%d", manager->out_dir, i);
+		OpenBinaryFileWrite(&(manager->out_fps[i]), file_name);
 	}
 
-	//allocate position pointers
-	manager->input_buffer_positions  = (int *) Calloc (manager->total_chunks * sizeof(int));
-	manager->input_buffer_lengths  = (int *) Calloc (manager->total_chunks * sizeof(int));
-
-	//output records are overlaid onto input_buffers; only the per-chunk write
-	//cursor is needed (records flushed to global_<chunk> at each refill).
-	manager->output_buffer_positions  = (int *) Calloc (manager->total_chunks * sizeof(int));
-
-	//open one persistent file pointer per chunk for sequential output writes;
-	//global_* files start empty each merge invocation (tmp is cleared upstream).
-	manager->output_fps = (FILE **) Calloc (manager->total_chunks * sizeof(FILE *));
-	for (i=0; i<manager->total_chunks;i++) {
-		char file_name[MAX_PATH_LENGTH];
-		snprintf(file_name, sizeof(file_name), "%s/global_%d", manager->output_dir, i);
-		OpenBinaryFileWrite(&(manager->output_fps[i]), file_name);
-	}
-
-	//allocate heap
 	manager->heap = (HeapElement *) Calloc (manager->total_chunks * sizeof (HeapElement));
 	manager->current_heap_size = 0;
 }
 
-int reduce(char* input_dir, char* temp_dir, int total_chunks, long working_chunk_size){
+int reduce(char* nexts_dir, char* out_dir, char* currents_dir, int total_chunks, long mem_bytes){
     Manager manager = {0};
-    strcpy(manager.input_dir, input_dir);
-    strcpy(manager.output_dir, temp_dir);
+    strcpy(manager.nexts_dir, nexts_dir);
+    strcpy(manager.out_dir, out_dir);
+    strcpy(manager.currents_dir, currents_dir);
     manager.total_chunks = total_chunks;
-    manager.working_chunk_size = working_chunk_size;
+    manager.mem_bytes = mem_bytes;
     setup(&manager);
     return merge_runs(&manager);
 }
 
 int main(int argc, char ** argv){
-	char * input_dir;
-	char * output_dir;
-	int total_chunks;
-
-	if (argc < 5){
-		printf("run ./merge <input_dir> <output_dir> <total_chunks> <working_chunk_size>\n");
+	if (argc < 6){
+		printf("run ./merge <nexts_dir> <out_dir> <currents_dir> <total_chunks> <mem_bytes>\n");
 		return FAILURE;
 	}
-	input_dir = argv[1];
-	output_dir = argv[2];
-	total_chunks = atoi(argv[3]);
-	long working_chunk_size = parse_chunk_size(argv[4]);
+	char * nexts_dir = argv[1];
+	char * out_dir = argv[2];
+	char * currents_dir = argv[3];
+	int total_chunks = atoi(argv[4]);
+	long mem_bytes = parse_mem_bytes(argv[5]);
 
-	return reduce(input_dir, output_dir, total_chunks, working_chunk_size);
+	return reduce(nexts_dir, out_dir, currents_dir, total_chunks, mem_bytes);
 }

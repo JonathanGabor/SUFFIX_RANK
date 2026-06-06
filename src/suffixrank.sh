@@ -22,7 +22,7 @@ CHUNKS=0
 
 TRUESTART=$($DATE)
 
-RAM_DIVISOR=20
+RAM_DIVISOR=15
 DEFAULT_MEM_BYTES=$(( RAM_DIVISOR * 16777216 ))
 
 # Convert a human-readable size (e.g. 8G, 512M, 2048K, or plain bytes) to bytes.
@@ -82,6 +82,8 @@ if [[ -n "$CHUNK_SIZE_OVERRIDE" ]]; then
         echo "Invalid --chunk-size '$CHUNK_SIZE': must be a positive integer"
         exit 1
     fi
+    # Derive a merge RAM budget consistent with the pinned chunk size.
+    MEM_BYTES=$(( CHUNK_SIZE * RAM_DIVISOR ))
     echo "Using chunk size: $CHUNK_SIZE elements (pinned via --chunk-size; byte alphabet, divsufsort path)"
 else
     MEM_BYTES=$(to_bytes "${2:-$DEFAULT_MEM_BYTES}") || { echo "Invalid memory limit '$2'"; exit 1; }
@@ -124,10 +126,10 @@ fi
 
 CHUNKS=$(ls -1 "${RANK_DIR}"/sa_* 2>/dev/null | wc -l | tr -d ' ')
 
-# merge currently keeps one input and one output FILE open per chunk.
+# merge keeps three FILEs open per chunk: nexts (read), currents (read), global (write).
 OPEN_FILE_LIMIT=$(ulimit -n)
 if [[ "$OPEN_FILE_LIMIT" != "unlimited" ]]; then
-    REQUIRED_OPEN_FILES=$(( 2 * CHUNKS + 16 ))
+    REQUIRED_OPEN_FILES=$(( 3 * CHUNKS + 16 ))
     if (( OPEN_FILE_LIMIT < REQUIRED_OPEN_FILES )); then
         echo "Error: current open-file limit is too low for ${CHUNKS} chunks."
         echo "merge needs at least ${REQUIRED_OPEN_FILES} file descriptors, but ulimit -n is ${OPEN_FILE_LIMIT}."
@@ -179,7 +181,7 @@ do
     if [[ $MORE_RUNS -eq 1 ]]
     then
         START=$($DATE)
-        ./merge ${TEMP_DIR} ${TEMP_DIR} $CHUNKS $CHUNK_SIZE
+        ./merge ${TEMP_DIR} ${TEMP_DIR} ${RANK_DIR} $CHUNKS $MEM_BYTES
         STATUS=$?
 
         if [[ $STATUS -eq $FAILURE ]]

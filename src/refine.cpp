@@ -1,8 +1,13 @@
-// Because init writes a true partial suffix array,
-// sa_buffer is already in local lex order; positions sharing the same
-// current_rank are sub-sorted by what follows. So refine can produce RunRecords
-// with a single linear scan over sa_buffer, emitting whenever (curr, next)
-// changes.
+// Because init writes a true partial suffix array, sa_buffer is already in local
+// lex order; positions sharing the same current_rank are sub-sorted by what
+// follows. So refine produces (next_rank, count) runs with a single linear scan
+// over sa_buffer, emitting a RankRun whenever the next-rank changes.
+//
+// refine no longer loads the current ranks (that array was the heaviest part of
+// its footprint). It groups purely by next-rank; a run of equal next-rank may
+// span a current-rank boundary, which merge later re-splits by jointly reading
+// this nexts_<id> stream against the currents_<id> stream. Dropping the
+// current-rank array lets the chunk size grow for a fixed RAM budget.
 
 extern "C" {
 #include "utils.h"
@@ -12,7 +17,7 @@ extern "C" {
 #include <cstdio>
 #include <cstdlib>
 
-// Distribution of local run lengths (RunRecord.count) emitted this iteration,
+// Distribution of local run lengths (RankRun.count) emitted this iteration,
 // gated by TEST_PERFORMANCE. refine is a fresh process per iteration, so this
 // zero-initialized histogram accumulates exactly one iteration's runs and is
 // printed at process exit (see main). Buckets: 1, 2, 3, 4, 5..2^8, 2^8..2^16,
@@ -34,41 +39,29 @@ static const char *const COUNT_BUCKET_LABELS[NUM_COUNT_BUCKETS] = {
 	"1", "2", "3", "4", "5..2^8", "2^8..2^16", "2^16..2^24", ">2^24"
 };
 
-static inline void emit_run(int64_t curr, int64_t next, int count,
-                            RunRecord *out_buf, int *out_count,
-                            int capacity, FILE *runsFP) {
+// Emit one (next_rank, count) run as a RankRun (escape-encoding large counts),
+// flushing the buffer first if the escape pair would not fit.
+static inline void emit_run(int64_t next, int count,
+                            RankRun *out_buf, int *out_count,
+                            int capacity, FILE *nextsFP) {
 	if (TEST_PERFORMANCE) g_count_hist[count_bucket(count)]++;
 	// Reserve room for an escape+overflow pair so it never splits across a flush.
 	if (*out_count + 2 > capacity) {
-		Fwrite(out_buf, sizeof(RunRecord), (size_t) *out_count, runsFP);
+		Fwrite(out_buf, sizeof(RankRun), (size_t) *out_count, nextsFP);
 		*out_count = 0;
 		if (TEST_PERFORMANCE) g_mid_chunk_flushes++;
 	}
-	RunRecord *r = &out_buf[(*out_count)++];
-	i40_store(&r->currentRank, curr);
-	i40_store(&r->nextRank, next);
-	if (count < COUNT_ESCAPE) {
-		r->count = (uint8_t) count;
-	} else {
-		// Count doesn't fit a byte: write the sentinel, then an overflow record
-		// carrying the true count in currentRank (its own count byte is ignored).
-		r->count = COUNT_ESCAPE;
-		RunRecord *ov = &out_buf[(*out_count)++];
-		i40_store(&ov->currentRank, (int64_t) count);
-		i40_store(&ov->nextRank, 0);
-		ov->count = 0;
-	}
+	rankrun_emit(out_buf, out_count, next, (long) count);
 }
 
 static int generate_local_runs_fast(char *rank_dir, char *runs_dir, int total_chunks,
                                     int chunk_id, long prefix_len, long working_chunk_size,
-                                    int40 *current_ranks_buffer,
                                     int40 *next_ranks_buffer,
                                     int *sa_buffer,
-                                    RunRecord *runs_buffer) {
+                                    RankRun *runs_buffer) {
 	char runs_file_name[MAX_PATH_LENGTH];
 	FILE *runsFP = NULL;
-	snprintf(runs_file_name, sizeof runs_file_name, "%s/runs_%d", runs_dir, chunk_id);
+	snprintf(runs_file_name, sizeof runs_file_name, "%s/nexts_%d", runs_dir, chunk_id);
 	OpenBinaryFileAppend(&runsFP, runs_file_name);
 
 	// Where the rank of position i+prefix_len lives (arbitrary prefix_len, see
@@ -79,17 +72,13 @@ static int generate_local_runs_fast(char *rank_dir, char *runs_dir, int total_ch
 		return EMPTY;
 	}
 
-	FILE *currentFP = NULL, *nextFP = NULL, *saFP = NULL;
-	char current_ranks_file_name[MAX_PATH_LENGTH];
+	FILE *nextFP = NULL, *saFP = NULL;
 	char next_ranks_file_name[MAX_PATH_LENGTH];
 	char sa_file_name[MAX_PATH_LENGTH];
 
-	snprintf(current_ranks_file_name, sizeof current_ranks_file_name,
-	         "%s/ranks_%d", rank_dir, chunk_id);
 	snprintf(sa_file_name, sizeof sa_file_name,
 	         "%s/sa_%d", rank_dir, chunk_id);
 
-	OpenBinaryFileRead(&currentFP, current_ranks_file_name);
 	OpenBinaryFileRead(&saFP, sa_file_name);
 
 	// Fill next_ranks_buffer[local] = rank of (chunk_id*S + local + prefix_len).
@@ -122,9 +111,6 @@ static int generate_local_runs_fast(char *rank_dir, char *runs_dir, int total_ch
 		}
 	}
 
-	fread(current_ranks_buffer, sizeof(int40), (size_t) working_chunk_size, currentFP);
-	fclose(currentFP);
-
 	int total_records = (int) fread(sa_buffer, sizeof(int),
 	                                (size_t) working_chunk_size, saFP);
 	fclose(saFP);
@@ -133,32 +119,30 @@ static int generate_local_runs_fast(char *rank_dir, char *runs_dir, int total_ch
 		return EMPTY;
 	}
 
-	// Single linear scan: emit a RunRecord every time (curr, next) changes.
-	// sa_buffer is in true lex order, so consecutive positions sharing
-	// (curr, next) are contiguous.
+	// Single linear scan: emit a (next_rank, count) RankRun every time the
+	// next-rank changes. sa_buffer is in true lex order, so positions sharing the
+	// same next-rank are contiguous (within, and possibly across, a current-rank
+	// group -- merge re-splits the latter via the currents stream).
 	int out_count = 0;
 	int runs_capacity = (int) (working_chunk_size / 3);
 
-	int64_t cur_c = i40_load(&current_ranks_buffer[sa_buffer[0]]);
 	int64_t cur_n = i40_load(&next_ranks_buffer[sa_buffer[0]]);
 	int cur_count = 1;
 
 	for (int i = 1; i < total_records; i++) {
-		int64_t c = i40_load(&current_ranks_buffer[sa_buffer[i]]);
 		int64_t n = i40_load(&next_ranks_buffer[sa_buffer[i]]);
-		if (c == cur_c && n == cur_n) {
+		if (n == cur_n) {
 			cur_count++;
 		} else {
-			emit_run(cur_c, cur_n, cur_count, runs_buffer, &out_count, runs_capacity, runsFP);
-			cur_c = c;
+			emit_run(cur_n, cur_count, runs_buffer, &out_count, runs_capacity, runsFP);
 			cur_n = n;
 			cur_count = 1;
 		}
 	}
-	emit_run(cur_c, cur_n, cur_count, runs_buffer, &out_count, runs_capacity, runsFP);
+	emit_run(cur_n, cur_count, runs_buffer, &out_count, runs_capacity, runsFP);
 
 	if (out_count > 0)
-		Fwrite(runs_buffer, sizeof(RunRecord), (size_t) out_count, runsFP);
+		Fwrite(runs_buffer, sizeof(RankRun), (size_t) out_count, runsFP);
 	fclose(runsFP);
 
 	return SUCCESS;
@@ -175,16 +159,18 @@ int main(int argc, char **argv) {
 	long prefix_len = atol(argv[4]);
 	long working_chunk_size = parse_chunk_size(argv[5]);
 
-	int40 *current_ranks_buffer = (int40 *) Calloc((size_t) working_chunk_size * sizeof(int40));
+	// refine no longer loads the current ranks: only the next-rank lookup array
+	// and the SA, plus the (next,count) output buffer. This is the per-item RAM
+	// reduction that lets the chunk size grow.
 	int40 *next_ranks_buffer    = (int40 *) Calloc((size_t) working_chunk_size * sizeof(int40));
 	int  *sa_buffer            = (int *)  Calloc((size_t) working_chunk_size * sizeof(int));
-	RunRecord *runs_buffer     = (RunRecord *) Calloc((size_t) (working_chunk_size / 3) * sizeof(RunRecord));
+	RankRun *runs_buffer       = (RankRun *) Calloc((size_t) (working_chunk_size / 3) * sizeof(RankRun));
 
 	int more_runs = EMPTY;
 	for (int chunk_id = 0; chunk_id < total_chunks; chunk_id++) {
 		int result = generate_local_runs_fast(rank_dir, runs_dir, total_chunks, chunk_id, prefix_len,
 		                                      working_chunk_size,
-		                                      current_ranks_buffer, next_ranks_buffer,
+		                                      next_ranks_buffer,
 		                                      sa_buffer, runs_buffer);
 		if (result == FAILURE) return FAILURE;
 		if (result != EMPTY) more_runs = SUCCESS;
@@ -204,7 +190,6 @@ int main(int argc, char **argv) {
 		}
 	}
 
-	free(current_ranks_buffer);
 	free(next_ranks_buffer);
 	free(sa_buffer);
 	free(runs_buffer);

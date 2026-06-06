@@ -4,12 +4,9 @@
 #include "utils.h"
 #include "algorithm.h"
 
-// Derived memory budget for merge buffers. Scales with the runtime chunk size.
-// Input and output share one buffer per chunk (output GlobalRecords are written
-// into the front over already-consumed input slots), so the whole 2*budget is
-// spent on input capacity: total merge RAM is 2 * MERGE_BUFFER_FACTOR *
-// working_chunk_size, divided across all total_chunks.
-#define MERGE_BUFFER_FACTOR 10L
+// Stream selector for the per-chunk RankRun readers.
+#define STREAM_NEXTS    0
+#define STREAM_CURRENTS 1
 
 typedef struct heap_element {
 	int64_t current_rank;   //ranks unpacked from int40 once on insert; int64 keeps the hot compare cheap
@@ -24,41 +21,65 @@ typedef struct output_element {
 	int chunk_id;
 } OutputElement;
 
+// Joint-walk cursor: the decoded "remaining" of the current currents-run and
+// nexts-run for a chunk. Persists across buffer refills, so a run that straddles
+// a refill is transparent. next_triplet emits min(cur_rem, next_rem) at a time.
+typedef struct triplet_cursor {
+	int64_t cur_rank;
+	long    cur_rem;
+	int64_t next_rank;
+	long    next_rem;
+} TripletCursor;
+
 typedef struct merge_manager {
 	long pair_count;
 	long updated_rank; //the new rank obtained by adding count to the prev value of the updated_rank
 	HeapElement *heap;  //keeps 1 from each buffer in top-down order - smallest on top (according to compare function)
 	HeapElement last_transferred;             //last element transferred from heap to output buffer
 
-	int *input_file_positions;             //current position in each file, -1 if the run is complete
-	FILE **input_fps;                      //one open file pointer per chunk for sequential run reads
+	// NEXTS stream (nexts_<id>) -- ALSO the in-place output overlay target.
+	// Resolved (updated_rank, count) RankRuns are written into the front over
+	// already-consumed nexts slots (same 6B size); split overflow is drained to
+	// global_<id> by the put_current flush-on-collision guard (see merge.c).
+	FILE **nexts_fps;
+	RankRun **nexts_buffers;
+	int *nexts_pos;          //read cursor in nexts buffer; -1 => fully drained
+	int *nexts_len;          //records currently in nexts buffer
+	int *nexts_filepos;      //running read count; -1 once EOF reached (no more refills)
+	int nexts_capacity;      //max RankRuns per nexts buffer (~2x currents capacity)
 
-	//Each chunk's buffer is shared for input and output: input RunRecords are read
-	//from the front; resolved output GlobalRecords (smaller, 6B vs 11B) are written
-	//back into the front over slots already copied into the heap. See merge.c.
-	RunRecord **input_buffers; //array of buffers to hold part of each run (also holds output)
-	int *input_buffer_positions; //position in current input buffer, if no need to refill  - -1
-	int input_buffer_capacity; //how many input elements max can each hold
-	int *input_buffer_lengths;  //number of actual elements currently in input buffer - can be less than max capacity
+	int *out_pos;            //output write cursor (records) into the nexts buffer front
+	FILE **out_fps;          //one persistent global_<id> output file pointer per chunk
 
-	int *output_buffer_positions;              //GlobalRecord write offset into the shared buffer (records); reset to 0 at each refill/flush
-	FILE **output_fps;                 //one persistent output file pointer per chunk; writes are sequential so we never reopen on each flush
+	// CURRENTS stream (currents_<id>), read-only. Supplies current-rank runs that
+	// re-split the nexts runs into (curr,next,count) triplets.
+	FILE **cur_fps;
+	RankRun **cur_buffers;
+	int *cur_pos;            //read cursor; -1 => drained
+	int *cur_len;
+	int *cur_filepos;        //running read count; -1 once EOF reached
+	int cur_capacity;
+
+	TripletCursor *cursors;  //per-chunk joint-walk state
 
 	int current_heap_size;
 	int total_chunks;
-	long working_chunk_size;                       //runtime chunk size; derived buffer sizes scale with this
-	char input_dir [MAX_PATH_LENGTH];              //to generate input file based on all file_id - interval_id combination listed in inputFileNumbers
-	char output_dir [MAX_PATH_LENGTH];             //where to write merged updates for each fileid-intervalid
+	long mem_bytes;                                //merge RAM budget; buffer sizes derived directly from this
+	char nexts_dir [MAX_PATH_LENGTH];              //where nexts_<id> live (and global_<id> are written)
+	char out_dir [MAX_PATH_LENGTH];                //where global_<id> are written
+	char currents_dir [MAX_PATH_LENGTH];           //where currents_<id> live
 }Manager;
 
-int reduce(char* input_dir, char* temp_dir, int total_chunks, long working_chunk_size);
+int reduce(char* nexts_dir, char* out_dir, char* currents_dir, int total_chunks, long mem_bytes);
 void setup(Manager * manager);
 void clean_up(Manager * manager);
-void flush_output_buffers (Manager *manager, int chunk_id);
-int refill_buffer (Manager * manager, int chunk_id);
+void flush_output(Manager *manager, int chunk_id);
+int refill_nexts(Manager * manager, int chunk_id);
+int refill_currents(Manager * manager, int chunk_id);
 void heap_to_output_last ( Manager *manager, HeapElement *current, OutputElement *result);
 void heap_to_output ( Manager *manager, HeapElement *current, OutputElement *result);
-int get_next_input_element (Manager * manager, int chunk_id, RunRecord *result);
+int next_triplet (Manager * manager, int chunk_id, TripletCursor *t,
+                  int64_t *curr, int64_t *next, long *count);
 int get_next_run (Manager * manager, int chunk_id, HeapElement *out);
 int insert_into_heap (Manager * manager, HeapElement *input);
 void replace_top_heap_element (Manager * manager, HeapElement *input);
